@@ -327,7 +327,7 @@ export function cordMesh(graph, radiusFor, { sides = 10, step = 1, nodeScale = 1
     }
     for (let i = 0; i < S.length - 1; i++) for (let k = 0; k < sides; k++) {
       const a = base + i * sides + k, b = base + i * sides + ((k + 1) % sides), c2 = a + sides, d = b + sides;
-      I.push(a, c2, b, b, c2, d);
+      I.push(a, b, c2, b, d, c2); // outward winding (u, w=T×u right-handed)
     }
   }
   // junction spheres
@@ -353,7 +353,7 @@ function sphere(rings, segs) {
   }
   for (let y = 0; y < rings; y++) for (let x = 0; x < segs; x++) {
     const a = y * (segs + 1) + x, b = a + segs + 1;
-    i.push(a, a + 1, b, a + 1, b + 1, b);
+    i.push(a, b, a + 1, a + 1, b, b + 1);
   }
   return { p, i };
 }

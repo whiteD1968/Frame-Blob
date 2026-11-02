@@ -124,7 +124,7 @@ function setParam(key, value, final) {
   }
   P[key] = value;
   if (key === 'showLattice') lattice.setVisible(P.showLattice || editLattice);
-  if (['lattice', 'blobSource', 'meshMode', 'blobShader', 'frameTopology'].includes(key)) panel.sync();
+  if (['lattice', 'blobSource', 'meshMode', 'blobShader', 'frameTopology', 'outerEdges', 'wrap'].includes(key)) panel.sync();
   if (STAGE_DISPLAY.has(key)) { viewer.setDisplay(P); if (final) commit(); syncTop(); return; }
   // changing the cell structure invalidates manual toggles
   if (final && ['lattice', 'count', 'nx', 'ny', 'nz', 'seed', 'boundary', 'relax', 'jitter', 'gradient', 'gradAxis'].includes(key) && P.disabled.length) {

@@ -306,7 +306,7 @@ class Welder {
  * opts.include : (face) => boolean   which faces contribute edges
  * opts.cellOk  : (cell) => boolean   which cells participate
  */
-export function buildGraph(groups, tol, seamOnly = false) {
+export function buildGraph(groups, tol, seamOnly = false, creaseDeg = 40) {
   const W = new Welder(tol);
   const edges = new Map();
   for (const g of groups) {
@@ -320,15 +320,22 @@ export function buildGraph(groups, tol, seamOnly = false) {
           if (a === b) continue;
           const key = a < b ? a + '_' + b : b + '_' + a;
           let e = edges.get(key);
-          if (!e) { e = { a: Math.min(a, b), b: Math.max(a, b), level: g.level, cells: new Set() }; edges.set(key, e); }
+          if (!e) { e = { a: Math.min(a, b), b: Math.max(a, b), level: g.level, cells: new Set(), normals: [] }; edges.set(key, e); }
           e.level = Math.min(e.level, g.level);
           e.cells.add(g.level * 100000 + cell.index);
+          if (seamOnly) e.normals.push(f.n);
         }
       }
     }
   }
   // seam mode: keep only edges where faces of two different cells meet
-  const kept = seamOnly ? [...edges.values()].filter((e) => e.cells.size >= 2) : [...edges.values()];
+  // ...or where the outer surface folds sharply (box edges, cylinder rims) — not shallow facet joints
+  const cosC = Math.cos((creaseDeg * Math.PI) / 180);
+  const crease = (e) => {
+    for (let i = 0; i < e.normals.length; i++) for (let j = i + 1; j < e.normals.length; j++) if (dot(e.normals[i], e.normals[j]) < cosC) return true;
+    return false;
+  };
+  const kept = seamOnly ? [...edges.values()].filter((e) => e.cells.size >= 2 || (creaseDeg < 180 && crease(e))) : [...edges.values()];
   const list = kept.map((e) => ({ a: e.a, b: e.b, level: e.level, length: Math.sqrt(dist2(W.pts[e.a], W.pts[e.b])) }));
   const valence = new Array(W.pts.length).fill(0);
   for (const e of list) { valence[e.a]++; valence[e.b]++; }
@@ -382,7 +389,7 @@ export function buildCells(P) {
     if (subCells.length) {
       groups.push({ level: 2, cells: subCells, include: (f) => f.kind === 'P' && (f.pkind === 'B' || (f.pkind === 'C' && !(byIndex.get(f.nb)?.active))) });
     }
-    graph = buildGraph(groups, tol, true);
+    graph = buildGraph(groups, tol, true, P.outerEdges === false ? 180 : (P.creaseAngle ?? 40));
   } else {
     const cellOk = P.frameScope === 'active' ? (c) => c.active : null;
     const groups = [{

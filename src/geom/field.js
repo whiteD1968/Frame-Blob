@@ -40,13 +40,13 @@ export function frameField(g, graph, P) {
   const F = emptyField(g);
   const [nx, ny] = g.dims, sxy = nx * ny, h = g.h, o = g.origin;
   const k = P.fillet;
-  const taper = P.taper;
   const radiusFor = (lvl) => (lvl === 1 ? P.radius : P.radius * P.subRadius);
 
   for (const e of graph.edges) {
     const A = graph.nodes[e.a], B = graph.nodes[e.b];
     const r = radiusFor(e.level);
     if (r <= 0) continue;
+    const taper = e.sub ? 0 : P.taper; // wrapped cords: no per-segment taper (avoids beading)
     const ba = [B[0] - A[0], B[1] - A[1], B[2] - A[2]];
     const bb = ba[0] * ba[0] + ba[1] * ba[1] + ba[2] * ba[2] || 1e-9;
     const m = r * (1 + Math.max(0, -taper)) + k + 2 * h;
@@ -218,10 +218,11 @@ export function wrapGraph(graph, B, g, bnd, P) {
   const onSkin = (p) => bnd.planes.some((pl) => Math.abs(pl.n[0] * p[0] + pl.n[1] * p[1] + pl.n[2] * p[2] - pl.d) < tol);
   const maxMove = Math.max(P.inflate, 0) + Math.max(P.skinPush, 0) + P.merge + 4 * g.h;
   const e = g.h * 0.5;
+  const lift = (P.cordLift ?? 0.5) * P.radius; // cord centre sits this far outside the cushion surface
   const project = (p0) => {
     let p = p0.slice();
-    for (let it = 0; it < 8; it++) {
-      const b = sampleField(B, g, p[0], p[1], p[2]);
+    for (let it = 0; it < 10; it++) {
+      const b = sampleField(B, g, p[0], p[1], p[2]) - lift;
       if (Math.abs(b) < 0.02 * g.h) break;
       const gx = (sampleField(B, g, p[0] + e, p[1], p[2]) - sampleField(B, g, p[0] - e, p[1], p[2])) / (2 * e);
       const gy = (sampleField(B, g, p[0], p[1] + e, p[2]) - sampleField(B, g, p[0], p[1] - e, p[2])) / (2 * e);
@@ -253,10 +254,10 @@ export function wrapGraph(graph, B, g, bnd, P) {
       const q = project([A[0] + (Bn[0] - A[0]) * t, A[1] + (Bn[1] - A[1]) * t, A[2] + (Bn[2] - A[2]) * t]);
       const id = nodes.length;
       nodes.push(q); valence.push(2);
-      edges.push({ a: prev, b: id, level: ed.level, length: 0 });
+      edges.push({ a: prev, b: id, level: ed.level, length: 0, sub: true });
       prev = id;
     }
-    edges.push({ a: prev, b: ed.b, level: ed.level, length: 0 });
+    edges.push({ a: prev, b: ed.b, level: ed.level, length: 0, sub: true });
   });
   // relax the projected cords along their length and re-project (taut, calm curves)
   const nb = nodes.map(() => []);

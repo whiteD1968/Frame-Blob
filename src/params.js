@@ -10,7 +10,7 @@ export const DEFAULTS = {
   // subdivision
   subdiv: 0, subSeed: 1, subRelax: 2, subRadius: 0.55,
   // frame
-  frameTopology: 'surface', cordSmooth: 2, radius: 2.2, nodeScale: 1.0, taper: 0.1, fillet: 3, skinEdges: false, frameScope: 'all', wrap: 1, cordTaut: 2, frameMesh: 'auto',
+  frameTopology: 'surface', cordSmooth: 2, outerEdges: true, creaseAngle: 40, cordLift: 0.5, radius: 2.2, nodeScale: 1.0, taper: 0.1, fillet: 3, skinEdges: false, frameScope: 'all', wrap: 1, cordTaut: 2, frameMesh: 'auto',
   // inflation
   blobSource: 'cells', blobLattice: 'random', blobCount: 14, blobSeed: 3, blobRelax: 2, blobJitter: 0.6,
   inflate: 7, roundness: 0.7, gap: 1.0, merge: 4, variance: 0.12, skinPush: 6, grooveOn: true, groove: 1.0, grooveSoft: 2.5,
@@ -57,8 +57,10 @@ export const SCHEMA = [
   ] },
   { title: 'Frame · SubD struts', open: true, items: [
     { key: 'frameTopology', label: 'Frame topology', type: 'select', options: { surface: 'Surface seams (cords)', walls: 'All cell walls (3D lattice)', cage: 'Walls + outer cage' }, note: 'surface = only where cushions meet on the outside' },
+    { key: 'outerEdges', label: 'Outer edges', type: 'bool', show: (P) => P.frameTopology === 'surface', note: 'frame where the outer surface folds (box edges, rims)' },
+    { key: 'creaseAngle', label: 'Crease angle °', min: 10, max: 120, step: 1, show: (P) => P.frameTopology === 'surface' && P.outerEdges },
     { key: 'cordSmooth', label: 'Cord smoothing', min: 0, max: 8, step: 1 },
-    { key: 'frameMesh', label: 'Frame mesh', type: 'select', options: { auto: 'Auto (cords when thin)', sdf: 'Fused SDF (fillets, print)', cords: 'Swept cords (exact)' } },
+    { key: 'frameMesh', label: 'Frame mesh', type: 'select', options: { auto: 'Auto (cords for seams / thin)', sdf: 'Fused SDF (fillets, print)', cords: 'Swept cords (exact)' } },
     { key: 'radius', label: 'Strut radius', min: 0, max: 20, step: 0.1 },
     { key: 'nodeScale', label: 'Node bulge', min: 0, max: 3, step: 0.01 },
     { key: 'taper', label: 'Mid-span taper', min: -0.8, max: 0.8, step: 0.01 },
@@ -66,6 +68,7 @@ export const SCHEMA = [
     { key: 'skinEdges', label: 'Outer skin edges', type: 'bool', show: (P) => P.frameTopology === 'walls' },
     { key: 'wrap', label: 'Wrap onto blob', min: 0, max: 1, step: 0.01, note: 'skin struts become cords on the cushion surface' },
     { key: 'cordTaut', label: 'Cord tautness', min: 0, max: 8, step: 1, show: (P) => P.wrap > 0, note: 'higher = cords bridge the crevices' },
+    { key: 'cordLift', label: 'Cord lift', min: -1, max: 1.5, step: 0.05, show: (P) => P.wrap > 0, note: 'cord centre above (+) or into (−) the cushion, × radius' },
     { key: 'frameScope', label: 'Frame scope', type: 'select', options: { all: 'All cells', active: 'Active cells only' }, show: (P) => P.frameTopology !== 'surface' },
   ] },
   { title: 'Inflation · Blob', open: true, items: [

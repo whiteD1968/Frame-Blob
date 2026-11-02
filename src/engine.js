@@ -37,9 +37,9 @@ function warpFields(g, fields, L) {
 }
 
 const CELL_KEYS = ['boundary', 'sizeX', 'sizeY', 'sizeZ', 'lattice', 'count', 'nx', 'ny', 'nz', 'jitter', 'gradient', 'gradAxis',
-  'relax', 'seed', 'cull', 'disabled', 'subdiv', 'subSeed', 'subRelax', 'frameScope', 'skinEdges', 'frameTopology', 'cordSmooth'];
+  'relax', 'seed', 'cull', 'disabled', 'subdiv', 'subSeed', 'subRelax', 'frameScope', 'skinEdges', 'frameTopology', 'cordSmooth', 'outerEdges', 'creaseAngle'];
 const BLOBCELL_KEYS = ['boundary', 'sizeX', 'sizeY', 'sizeZ', 'blobSource', 'blobLattice', 'blobCount', 'blobSeed', 'blobRelax', 'nx', 'ny', 'nz', 'gradAxis'];
-const FRAME_KEYS = ['radius', 'nodeScale', 'taper', 'fillet', 'subRadius', 'wrap', 'cordTaut'];
+const FRAME_KEYS = ['radius', 'nodeScale', 'taper', 'fillet', 'subRadius', 'wrap', 'cordTaut', 'cordLift'];
 const BLOB_KEYS = ['inflate', 'roundness', 'gap', 'merge', 'variance', 'skinPush', 'blobSource'];
 const GROOVE_KEYS = ['grooveOn', 'groove', 'grooveSoft'];
 
@@ -124,7 +124,7 @@ export function createEngine() {
     const mopts = { smooth: P.smooth, mode: P.meshMode || 'voxel', levels: P.subdLevels || 0 };
     // thin struts → swept cords (exact radius); otherwise SDF frame (filleted, watertight)
     const fm0 = P.frameMesh || 'auto';
-    const useCords = fm0 === 'cords' || (fm0 === 'auto' && P.radius < grid.h * 1.2);
+    const useCords = fm0 === 'cords' || (fm0 === 'auto' && (P.radius < grid.h * 1.2 || (P.frameTopology === 'surface' && P.wrap > 0)));
     const fKey = meshKey + useCords + C.frameKey;
     if (!C.frameMesh || C.frameMeshKey !== fKey) {
       C.frameMesh = useCords

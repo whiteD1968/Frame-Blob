@@ -256,7 +256,7 @@ void main() {
   vec3 L = normalize(vec3(-0.4, -0.5, 0.9));
   vec3 H = normalize(L + normalize(vV));
   float spec = pow(clamp(dot(n, H), 0.0, 1.0), 60.0);
-  float band = smoothstep(0.55, 0.6, abs(n.z)) * 0.18; // soft studio band reflection
+  float band = smoothstep(0.2, 0.95, n.z) * 0.12; // soft overhead softbox
   vec3 col = mix(uColor, uRim, fr) + spec * 0.9 + band;
   float a = uXray > 0.5 ? (0.18 + 0.7 * fr) * uOpacity : uOpacity;
   gl_FragColor = vec4(col, a);
