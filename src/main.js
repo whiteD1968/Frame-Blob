@@ -124,7 +124,7 @@ function setParam(key, value, final) {
   }
   P[key] = value;
   if (key === 'showLattice') lattice.setVisible(P.showLattice || editLattice);
-  if (['lattice', 'blobSource', 'meshMode', 'blobShader'].includes(key)) panel.sync();
+  if (['lattice', 'blobSource', 'meshMode', 'blobShader', 'frameTopology'].includes(key)) panel.sync();
   if (STAGE_DISPLAY.has(key)) { viewer.setDisplay(P); if (final) commit(); syncTop(); return; }
   // changing the cell structure invalidates manual toggles
   if (final && ['lattice', 'count', 'nx', 'ny', 'nz', 'seed', 'boundary', 'relax', 'jitter', 'gradient', 'gradAxis'].includes(key) && P.disabled.length) {
@@ -285,14 +285,14 @@ function updateStats() {
   const size = s.bmax.map((v, i) => (v - s.bmin[i]).toFixed(0)).join(' × ');
   $('#stats').innerHTML = [
     `<b>${s.active}</b>/${s.cells} cells${s.subCells ? ` · ${s.subCells} sub` : ''}`,
-    `<b>${s.struts}</b> struts · ${s.nodes} nodes`,
+    `<b>${s.struts}</b> ${s.cords ? 'cord segments' : 'struts'} · ${s.nodes} nodes`,
     `strut length <b>${(s.strutLength / (u === 'mm' ? 1000 : u === 'cm' ? 100 : 1)).toFixed(2)} m</b>`,
     `blob <b>${vol(s.blobVolume)}</b>`,
     `frame <b>${vol(s.frameVolume)}</b>`,
     `envelope ${size} ${u}`,
     `${((s.frameTris + s.blobTris) / 1000).toFixed(0)}k tris${s.subdLevels ? ` · SubD ${s.subdLevels}` : ''}${curL && !isIdentity(curL) ? ' · lattice on' : ''}`,
     `<span class="dim">${Math.round(T.cells + T.frame + T.blob + T.mesh)} ms · grid ${s.grid}</span>`,
-  ].join('<i></i>') + (s.voxel && P.radius < s.voxel * 0.8 && P.showFrame ? `<i></i><span class="warn">struts thinner than voxel (${s.voxel.toFixed(1)}) — raise Mesh › Resolution</span>` : '');
+  ].join('<i></i>') + (s.voxel && !s.cords && P.radius < s.voxel * 0.8 && P.showFrame ? `<i></i><span class="warn">struts thinner than voxel (${s.voxel.toFixed(1)}) — raise Mesh › Resolution</span>` : '');
 }
 
 // ------------------------------------------------------------------ undo / redo

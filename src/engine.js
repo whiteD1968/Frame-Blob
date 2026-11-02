@@ -1,7 +1,7 @@
 // Frame/Blob — cached geometry pipeline (runs in a worker, or on the main thread as fallback)
 import { buildCells, buildBlobCells, mulberry32 } from './geom/voronoi.js';
-import { makeGrid, frameField, blobField, applyGroove, wrapGraph } from './geom/field.js';
-import { polygonise, meshVolume, meshArea } from './geom/mesh.js';
+import { makeGrid, frameField, blobField, applyGroove, wrapGraph, blurField } from './geom/field.js';
+import { polygonise, meshVolume, meshArea, cordMesh } from './geom/mesh.js';
 import { computeDrawing } from './geom/drawing.js';
 import { isIdentity, warpPoint, unwarpPoint } from './geom/ffd.js';
 import { sampleField } from './geom/field.js';
@@ -37,9 +37,9 @@ function warpFields(g, fields, L) {
 }
 
 const CELL_KEYS = ['boundary', 'sizeX', 'sizeY', 'sizeZ', 'lattice', 'count', 'nx', 'ny', 'nz', 'jitter', 'gradient', 'gradAxis',
-  'relax', 'seed', 'cull', 'disabled', 'subdiv', 'subSeed', 'subRelax', 'frameScope', 'skinEdges'];
+  'relax', 'seed', 'cull', 'disabled', 'subdiv', 'subSeed', 'subRelax', 'frameScope', 'skinEdges', 'frameTopology', 'cordSmooth'];
 const BLOBCELL_KEYS = ['boundary', 'sizeX', 'sizeY', 'sizeZ', 'blobSource', 'blobLattice', 'blobCount', 'blobSeed', 'blobRelax', 'nx', 'ny', 'nz', 'gradAxis'];
-const FRAME_KEYS = ['radius', 'nodeScale', 'taper', 'fillet', 'subRadius', 'wrap'];
+const FRAME_KEYS = ['radius', 'nodeScale', 'taper', 'fillet', 'subRadius', 'wrap', 'cordTaut'];
 const BLOB_KEYS = ['inflate', 'roundness', 'gap', 'merge', 'variance', 'skinPush', 'blobSource'];
 const GROOVE_KEYS = ['grooveOn', 'groove', 'grooveSoft'];
 
@@ -100,7 +100,11 @@ export function createEngine() {
     t0 = performance.now();
     const frameKey = grid.key + cellsKey + pick(P, FRAME_KEYS) + (P.wrap > 0 ? rawKey : '');
     if (C.frameKey !== frameKey) {
-      C.frameGraph = P.wrap > 0 ? wrapGraph(S.graph, C.Braw, grid, S.boundary, P) : S.graph;
+      if (P.wrap > 0) {
+        const r = Math.round((P.cordTaut ?? 3) * 1);
+        const Bw = r > 0 ? blurField(C.Braw, grid, r, 2) : C.Braw;
+        C.frameGraph = wrapGraph(S.graph, Bw, grid, S.boundary, P);
+      } else C.frameGraph = S.graph;
       C.F = frameField(grid, C.frameGraph, P);
       C.frameKey = frameKey; C.frameMesh = null;
     }
@@ -118,9 +122,18 @@ export function createEngine() {
     t0 = performance.now();
     const meshKey = pick(P, ['smooth', 'meshMode', 'subdLevels']);
     const mopts = { smooth: P.smooth, mode: P.meshMode || 'voxel', levels: P.subdLevels || 0 };
-    if (!C.frameMesh || C.frameMeshKey !== meshKey) { C.frameMesh = polygonise(C.F, grid, mopts); }
+    // thin struts → swept cords (exact radius); otherwise SDF frame (filleted, watertight)
+    const fm0 = P.frameMesh || 'auto';
+    const useCords = fm0 === 'cords' || (fm0 === 'auto' && P.radius < grid.h * 1.2);
+    const fKey = meshKey + useCords + C.frameKey;
+    if (!C.frameMesh || C.frameMeshKey !== fKey) {
+      C.frameMesh = useCords
+        ? cordMesh(C.frameGraph, (lvl) => (lvl === 1 ? P.radius : P.radius * P.subRadius), { nodeScale: P.nodeScale })
+        : polygonise(C.F, grid, mopts);
+    }
+    C.cords = useCords;
     if (!C.blobMesh || C.blobMeshKey !== meshKey) { C.blobMesh = polygonise(C.B, grid, mopts); }
-    C.frameMeshKey = C.blobMeshKey = meshKey;
+    C.frameMeshKey = fKey; C.blobMeshKey = meshKey;
     T.mesh = performance.now() - t0;
     C.grid = grid;
 
@@ -147,6 +160,7 @@ export function createEngine() {
       bmin: S.boundary.bmin, bmax: S.boundary.bmax,
       grid: grid.dims.join('×'),
       voxel: grid.h,
+      cords: C.cords,
       subdLevels: Math.max(fm.levels, bm.levels),
     };
     return {

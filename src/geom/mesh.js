@@ -263,3 +263,97 @@ export function polygonise(F, g, opts) {
   }
   return { positions: pos, normals, indices: quadsToTris(Q), wire: quadEdges(Q), levels };
 }
+
+// ---------------------------------------------------------------- swept cords
+// Decompose a strut graph into chains between junctions (valence ≠ 2), run a Catmull–Rom spline
+// through each chain and sweep a circular section with parallel-transport frames. Junctions get
+// spheres. Exact radius at any resolution: used for thin cords, where voxels would break them.
+export function cordMesh(graph, radiusFor, { sides = 10, step = 1, nodeScale = 1 } = {}) {
+  const N = graph.nodes, nb = N.map(() => []);
+  graph.edges.forEach((e, i) => { nb[e.a].push([e.b, i]); nb[e.b].push([e.a, i]); });
+  const used = new Uint8Array(graph.edges.length);
+  const chains = [];
+  const walk = (start, first) => {
+    const pts = [start]; let prev = start, [cur, ei] = first; used[ei] = 1;
+    const level = graph.edges[ei].level;
+    while (true) {
+      pts.push(cur);
+      if (nb[cur].length !== 2 || cur === start) break;
+      const nx = nb[cur].find(([n, j]) => !used[j]);
+      if (!nx) break;
+      used[nx[1]] = 1; prev = cur; [cur] = nx;
+    }
+    chains.push({ pts, level, closed: pts[0] === pts[pts.length - 1] });
+  };
+  N.forEach((_, i) => { if (nb[i].length !== 2) for (const f of nb[i]) if (!used[f[1]]) walk(i, f); });
+  N.forEach((_, i) => { for (const f of nb[i]) if (!used[f[1]]) walk(i, f); }); // closed loops
+  const P = [], Nm = [], I = [];
+  const crs = (p0, p1, p2, p3, t) => {
+    const t2 = t * t, t3 = t2 * t;
+    return [0, 1, 2].map((k) => 0.5 * (2 * p1[k] + (-p0[k] + p2[k]) * t + (2 * p0[k] - 5 * p1[k] + 4 * p2[k] - p3[k]) * t2 + (-p0[k] + 3 * p1[k] - 3 * p2[k] + p3[k]) * t3));
+  };
+  for (const ch of chains) {
+    const r = radiusFor(ch.level);
+    if (r <= 0 || ch.pts.length < 2) continue;
+    const c = ch.pts.map((i) => N[i]);
+    // sample spline
+    const S = [];
+    for (let i = 0; i < c.length - 1; i++) {
+      const p0 = c[Math.max(i - 1, 0)], p1 = c[i], p2 = c[i + 1], p3 = c[Math.min(i + 2, c.length - 1)];
+      const L = Math.hypot(p2[0] - p1[0], p2[1] - p1[1], p2[2] - p1[2]);
+      const n = Math.max(1, Math.ceil(L / (step * r * 1.5)));
+      for (let s = 0; s < n; s++) S.push(crs(p0, p1, p2, p3, s / n));
+    }
+    S.push(c[c.length - 1]);
+    if (S.length < 2) continue;
+    // parallel transport frames
+    const T = S.map((p, i) => { const a = S[Math.max(i - 1, 0)], b = S[Math.min(i + 1, S.length - 1)]; const d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]]; const l = Math.hypot(...d) || 1; return d.map((x) => x / l); });
+    let n0 = Math.abs(T[0][2]) < 0.9 ? [0, 0, 1] : [1, 0, 0];
+    let u = cross3(T[0], n0); u = nrm(u); let w = cross3(T[0], u);
+    const base = P.length / 3;
+    for (let i = 0; i < S.length; i++) {
+      if (i > 0) { // transport u
+        const t = T[i];
+        const d = u[0] * t[0] + u[1] * t[1] + u[2] * t[2];
+        u = nrm([u[0] - d * t[0], u[1] - d * t[1], u[2] - d * t[2]]);
+        w = cross3(t, u);
+      }
+      for (let k = 0; k < sides; k++) {
+        const a = (k / sides) * Math.PI * 2, ca = Math.cos(a), sa = Math.sin(a);
+        const nn = [u[0] * ca + w[0] * sa, u[1] * ca + w[1] * sa, u[2] * ca + w[2] * sa];
+        P.push(S[i][0] + nn[0] * r, S[i][1] + nn[1] * r, S[i][2] + nn[2] * r);
+        Nm.push(...nn);
+      }
+    }
+    for (let i = 0; i < S.length - 1; i++) for (let k = 0; k < sides; k++) {
+      const a = base + i * sides + k, b = base + i * sides + ((k + 1) % sides), c2 = a + sides, d = b + sides;
+      I.push(a, c2, b, b, c2, d);
+    }
+  }
+  // junction spheres
+  const sph = sphere(8, 12);
+  N.forEach((p, i) => {
+    if (nb[i].length === 2 || !nb[i].length) return;
+    const lvl = Math.min(...nb[i].map(([, j]) => graph.edges[j].level));
+    const r = radiusFor(lvl) * Math.max(1.02, nodeScale);
+    const base = P.length / 3;
+    for (let k = 0; k < sph.p.length; k += 3) { P.push(p[0] + sph.p[k] * r, p[1] + sph.p[k + 1] * r, p[2] + sph.p[k + 2] * r); Nm.push(sph.p[k], sph.p[k + 1], sph.p[k + 2]); }
+    for (const t of sph.i) I.push(base + t);
+  });
+  const indices = new Uint32Array(I);
+  return { positions: new Float32Array(P), normals: new Float32Array(Nm), indices, wire: new Uint32Array(0), levels: 0 };
+}
+const cross3 = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+const nrm = (a) => { const l = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / l, a[1] / l, a[2] / l]; };
+function sphere(rings, segs) {
+  const p = [], i = [];
+  for (let y = 0; y <= rings; y++) for (let x = 0; x <= segs; x++) {
+    const th = (y / rings) * Math.PI, ph = (x / segs) * Math.PI * 2;
+    p.push(Math.sin(th) * Math.cos(ph), Math.sin(th) * Math.sin(ph), Math.cos(th));
+  }
+  for (let y = 0; y < rings; y++) for (let x = 0; x < segs; x++) {
+    const a = y * (segs + 1) + x, b = a + segs + 1;
+    i.push(a, a + 1, b, a + 1, b + 1, b);
+  }
+  return { p, i };
+}

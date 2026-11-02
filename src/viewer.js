@@ -395,7 +395,7 @@ export class Viewer {
         frame = new THREE.MeshStandardMaterial({ color: 0x2a2d2c, roughness: 0.35, metalness: 0.6 });
         break;
       case 'diagram':
-        blob = new THREE.MeshStandardMaterial({ color: 0x9a9a9a, roughness: 0.35, metalness: 0.1, transparent: true, opacity: 0.9 });
+        blob = new THREE.MeshStandardMaterial({ color: 0xa6a8a6, roughness: 0.4, metalness: 0.1 });
         frame = new THREE.MeshStandardMaterial({ color: 0xf5f5f5, roughness: 0.3, emissive: 0x222222 });
         break;
       default: // fabric-glass

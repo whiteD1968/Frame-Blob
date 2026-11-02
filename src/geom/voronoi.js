@@ -306,7 +306,7 @@ class Welder {
  * opts.include : (face) => boolean   which faces contribute edges
  * opts.cellOk  : (cell) => boolean   which cells participate
  */
-export function buildGraph(groups, tol) {
+export function buildGraph(groups, tol, seamOnly = false) {
   const W = new Welder(tol);
   const edges = new Map();
   for (const g of groups) {
@@ -327,7 +327,9 @@ export function buildGraph(groups, tol) {
       }
     }
   }
-  const list = [...edges.values()].map((e) => ({ a: e.a, b: e.b, level: e.level, length: Math.sqrt(dist2(W.pts[e.a], W.pts[e.b])) }));
+  // seam mode: keep only edges where faces of two different cells meet
+  const kept = seamOnly ? [...edges.values()].filter((e) => e.cells.size >= 2) : [...edges.values()];
+  const list = kept.map((e) => ({ a: e.a, b: e.b, level: e.level, length: Math.sqrt(dist2(W.pts[e.a], W.pts[e.b])) }));
   const valence = new Array(W.pts.length).fill(0);
   for (const e of list) { valence[e.a]++; valence[e.b]++; }
   return { nodes: W.pts, edges: list, valence };
@@ -369,14 +371,34 @@ export function buildCells(P) {
 
   const sizeRef = len(sub(bnd.bmax, bnd.bmin));
   const tol = sizeRef * 1e-5;
-  const cellOk = P.frameScope === 'active' ? (c) => c.active : null;
-  const groups = [{
-    level: 1, cells,
-    cellOk,
-    include: (f) => (f.kind === 'C' ? true : f.kind === 'B' ? P.skinEdges : false),
-  }];
-  if (subCells.length) groups.push({ level: 2, cells: subCells, include: (f) => f.kind === 'C' });
-  const graph = buildGraph(groups, tol);
+  const topo = P.frameTopology || 'walls';
+  let graph;
+  if (topo === 'surface') {
+    // Only the seams between neighbouring cushions on the outer surface of the (active) cluster:
+    // skin faces, plus walls exposed by culled neighbours. Facet edges within one cell are dropped.
+    const byIndex = new Map(cells.map((c) => [c.index, c]));
+    const exposed = (f) => f.kind === 'B' || (f.kind === 'C' && !(byIndex.get(f.nb)?.active));
+    const groups = [{ level: 1, cells, cellOk: (c) => c.active, include: exposed }];
+    if (subCells.length) {
+      groups.push({ level: 2, cells: subCells, include: (f) => f.kind === 'P' && (f.pkind === 'B' || (f.pkind === 'C' && !(byIndex.get(f.nb)?.active))) });
+    }
+    graph = buildGraph(groups, tol, true);
+  } else {
+    const cellOk = P.frameScope === 'active' ? (c) => c.active : null;
+    const groups = [{
+      level: 1, cells,
+      cellOk,
+      include: (f) => (f.kind === 'C' ? true : f.kind === 'B' ? (P.skinEdges || topo === 'cage') : false),
+    }];
+    if (subCells.length) groups.push({ level: 2, cells: subCells, include: (f) => f.kind === 'C' });
+    graph = buildGraph(groups, tol);
+  }
+  // skin flags (before smoothing moves nodes off the boundary planes)
+  const onSkin = (p) => bnd.planes.some((pl) => Math.abs(dot(pl.n, p) - pl.d) < tol * 20);
+  graph.skinNode = graph.nodes.map((n) => topo === 'surface' || onSkin(n));
+  graph.skinEdge = graph.edges.map((e) => topo === 'surface' || (graph.skinNode[e.a] && graph.skinNode[e.b] &&
+    onSkin(scale(add(graph.nodes[e.a], graph.nodes[e.b]), 0.5))));
+  if (P.cordSmooth > 0) smoothCords(graph, P.cordSmooth);
   return { boundary: bnd, seeds, cells, subCells, graph };
 }
 
@@ -389,4 +411,22 @@ export function buildBlobCells(P, bnd) {
   const cells = computeCells(seeds, base);
   cells.forEach((c) => (c.active = true));
   return cells;
+}
+
+// Relax chains of valence-2 nodes (Laplacian), keeping junctions fixed: faceted seams become calm curves.
+function smoothCords(graph, iters) {
+  const nb = graph.nodes.map(() => []);
+  for (const e of graph.edges) { nb[e.a].push(e.b); nb[e.b].push(e.a); }
+  let P = graph.nodes.map((p) => p.slice());
+  for (let it = 0; it < iters * 4; it++) {
+    const Q = P.map((p) => p.slice());
+    for (let i = 0; i < P.length; i++) {
+      if (nb[i].length !== 2) continue;
+      const a = P[nb[i][0]], b = P[nb[i][1]];
+      for (let k = 0; k < 3; k++) Q[i][k] = 0.5 * P[i][k] + 0.25 * (a[k] + b[k]);
+    }
+    P = Q;
+  }
+  graph.nodes = P;
+  for (const e of graph.edges) e.length = Math.sqrt(dist2(P[e.a], P[e.b]));
 }

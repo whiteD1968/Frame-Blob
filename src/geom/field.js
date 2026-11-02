@@ -184,6 +184,33 @@ export function applyGroove(Braw, frameF, P) {
   return B;
 }
 
+// Separable box blur (clamped) — a "shrink-wrap" copy of the blob field: cords projected onto
+// it ride over the crevices between balloons like a taut string instead of diving into them.
+export function blurField(F, g, r, passes = 2) {
+  if (r < 1) return F;
+  const [nx, ny, nz] = g.dims, st = [1, nx, nx * ny];
+  let A = Float32Array.from(F, (v) => Math.min(v, 50 * g.h)), Bf = new Float32Array(A.length);
+  for (let p = 0; p < passes; p++) for (let ax = 0; ax < 3; ax++) {
+    const n = g.dims[ax], s = st[ax];
+    const lines = A.length / n;
+    const o1 = ax === 0 ? 1 : 0;
+    for (let z = 0; z < nz; z++) for (let y = 0; y < ny; y++) for (let x = 0; x < nx; x++) {
+      const c = [x, y, z][ax];
+      if (c !== 0) continue; // start of each line along ax
+      const base = x + nx * y + nx * ny * z;
+      let acc = 0, cnt = 0;
+      for (let i = -r; i <= r; i++) { const j = Math.min(Math.max(i, 0), n - 1); acc += A[base + j * s]; cnt++; }
+      for (let i = 0; i < n; i++) {
+        Bf[base + i * s] = acc / cnt;
+        const add = Math.min(i + r + 1, n - 1), rem = Math.max(i - r, 0);
+        acc += A[base + add * s] - A[base + rem * s];
+      }
+    }
+    [A, Bf] = [Bf, A];
+  }
+  return A;
+}
+
 // Wrap: project skin nodes + subdivided skin struts onto the blob surface,
 // so the frame reads as cords tied around the cushions.
 export function wrapGraph(graph, B, g, bnd, P) {
@@ -209,15 +236,16 @@ export function wrapGraph(graph, B, g, bnd, P) {
     const w = P.wrap;
     return [p0[0] + (p[0] - p0[0]) * w, p0[1] + (p[1] - p0[1]) * w, p0[2] + (p[2] - p0[2]) * w];
   };
-  const skin = graph.nodes.map(onSkin);
+  const skin = graph.skinNode || graph.nodes.map(onSkin);
   const nodes = graph.nodes.map((n, i) => (skin[i] ? project(n) : n));
   const valence = graph.valence.slice();
   const edges = [];
   const seg = Math.max(g.h * 2.5, 1e-3);
-  for (const ed of graph.edges) {
+  graph.edges.forEach((ed, ei) => {
     const A = graph.nodes[ed.a], Bn = graph.nodes[ed.b];
     const mid = [(A[0] + Bn[0]) / 2, (A[1] + Bn[1]) / 2, (A[2] + Bn[2]) / 2];
-    if (!(skin[ed.a] && skin[ed.b] && onSkin(mid))) { edges.push(ed); continue; }
+    const skinEdge = graph.skinEdge ? graph.skinEdge[ei] : (skin[ed.a] && skin[ed.b] && onSkin(mid));
+    if (!skinEdge) { edges.push(ed); return; }
     const k = Math.max(1, Math.ceil(ed.length / seg));
     let prev = ed.a;
     for (let i = 1; i < k; i++) {
@@ -229,6 +257,18 @@ export function wrapGraph(graph, B, g, bnd, P) {
       prev = id;
     }
     edges.push({ a: prev, b: ed.b, level: ed.level, length: 0 });
+  });
+  // relax the projected cords along their length and re-project (taut, calm curves)
+  const nb = nodes.map(() => []);
+  for (const e of edges) { nb[e.a].push(e.b); nb[e.b].push(e.a); }
+  for (let it = 0; it < 4; it++) {
+    const Q = nodes.map((p) => p);
+    for (let i = graph.nodes.length; i < nodes.length; i++) {
+      if (nb[i].length !== 2) continue;
+      const a = nodes[nb[i][0]], b = nodes[nb[i][1]], p = nodes[i];
+      Q[i] = project([0.5 * p[0] + 0.25 * (a[0] + b[0]), 0.5 * p[1] + 0.25 * (a[1] + b[1]), 0.5 * p[2] + 0.25 * (a[2] + b[2])]);
+    }
+    for (let i = graph.nodes.length; i < nodes.length; i++) nodes[i] = Q[i];
   }
   return { nodes, edges, valence };
 }
