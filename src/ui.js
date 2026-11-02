@@ -92,3 +92,27 @@ export function toast(msg, ms = 1800) {
   requestAnimationFrame(() => t.classList.add('on'));
   setTimeout(() => { t.classList.remove('on'); setTimeout(() => t.remove(), 300); }, ms);
 }
+
+// In-page replacements for prompt / confirm (sandboxed hosts block the native ones)
+export function ask(title, value = '', { ok = 'OK', multiline = false } = {}) {
+  return new Promise((resolve) => {
+    const inp = el(multiline ? 'textarea' : 'input', { class: 'ask-in', value });
+    if (multiline) inp.value = value;
+    let done = false;
+    const finish = (v) => { if (done) return; done = true; m.close(); resolve(v); };
+    const m = modal(title, el('div', { class: 'ask' }, inp,
+      el('div', { class: 'ask-btns' }, el('button', { class: 'mini', onclick: () => finish(null) }, 'Cancel'), el('button', { class: 'pri', onclick: () => finish(inp.value) }, ok))),
+      { onClose: () => finish(null) });
+    inp.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !multiline) finish(inp.value); if (e.key === 'Escape') finish(null); });
+    setTimeout(() => { inp.focus(); inp.select && inp.select(); }, 20);
+  });
+}
+export function confirmBox(msg, ok = 'OK') {
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (v) => { if (done) return; done = true; m.close(); resolve(v); };
+    const m = modal('Confirm', el('div', { class: 'ask' }, el('p', {}, msg),
+      el('div', { class: 'ask-btns' }, el('button', { class: 'mini', onclick: () => finish(false) }, 'Cancel'), el('button', { class: 'pri', onclick: () => finish(true) }, ok))),
+      { onClose: () => finish(false) });
+  });
+}

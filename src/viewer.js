@@ -106,15 +106,21 @@ export class Viewer {
     this.renderer.domElement.addEventListener('pointerdown', (e) => this._quadPointer(e), { capture: true });
     new ResizeObserver(() => this.resize()).observe(container);
     this.resize();
+    // render on demand: only when the camera moves or something calls invalidate()
+    this.dirty = true;
+    for (const n of VIEW_NAMES) this.controls[n].addEventListener('change', () => (this.dirty = true));
     const loop = () => {
       requestAnimationFrame(loop);
       for (const n of VIEW_NAMES) if (this.controls[n].enabled) this.controls[n].update();
-      this.render();
+      if (this.dirty) { this.dirty = false; this.render(); }
     };
     loop();
   }
 
+  invalidate() { this.dirty = true; }
+
   resize() {
+    this.dirty = true;
     const w = this.container.clientWidth, h = this.container.clientHeight;
     this.renderer.setSize(w, h, false);
     this.renderer.domElement.style.width = w + 'px';
@@ -140,6 +146,7 @@ export class Viewer {
   }
 
   fit(name, keepDir = false) {
+    this.dirty = true;
     const cam = this.cams[name], ctl = this.controls[name];
     const c = this.bounds.getCenter(new THREE.Vector3());
     const size = this.bounds.getSize(new THREE.Vector3());
@@ -168,6 +175,7 @@ export class Viewer {
   }
 
   setView(name, refit = false) {
+    this.dirty = true;
     if (name === 'quad') { this.quad = !this.quad; this._updateFrustums(); this.fitAll(); this._activate(this.view); return; }
     const wasQuad = this.quad;
     this.quad = false;
@@ -222,6 +230,7 @@ export class Viewer {
 
   // ------------------------------------------------------------ geometry
   setGeometry(out) {
+    this.dirty = true;
     const mk = (m) => {
       const g = new THREE.BufferGeometry();
       g.setAttribute('position', new THREE.BufferAttribute(m.positions, 3));
@@ -282,6 +291,7 @@ export class Viewer {
   }
 
   setDisplay(P) {
+    this.dirty = true;
     this.frameMesh.visible = P.showFrame;
     this.blobMesh.visible = P.showBlob;
     this.blobWire.visible = P.showBlob && P.material === 'diagram';
@@ -296,6 +306,7 @@ export class Viewer {
   }
 
   setMaterial(name) {
+    this.dirty = true;
     this._mat = name;
     const dark = name === 'diagram';
     this._dark = dark;
@@ -355,9 +366,9 @@ export class Viewer {
   flash(p, r) {
     this.highlight.position.copy(p);
     this.highlight.scale.setScalar(r);
-    this.highlight.visible = true;
+    this.highlight.visible = true; this.dirty = true;
     clearTimeout(this._ft);
-    this._ft = setTimeout(() => (this.highlight.visible = false), 450);
+    this._ft = setTimeout(() => { this.highlight.visible = false; this.dirty = true; }, 450);
   }
 
   // ------------------------------------------------------------ capture

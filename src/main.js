@@ -1,7 +1,7 @@
 // Frame/Blob — app
 import { Viewer, VIEW_NAMES } from './viewer.js';
 import { DEFAULTS, SCHEMA, PRESETS, MATERIALS } from './params.js';
-import { buildPanel, el, modal, toast } from './ui.js';
+import { buildPanel, el, modal, toast, ask, confirmBox } from './ui.js';
 import { Library, Session, History, iterationSheet } from './store.js';
 import { download, slug, exportSTL, exportOBJ, exportGLB, exportPNG, cutListCSV } from './exporters.js';
 import { drawingToSVG, drawingToDXF } from './geom/drawing.js';
@@ -158,7 +158,7 @@ function buildTop() {
   $('#save').onclick = saveToLibrary;
   $('#vary').onclick = variations;
   $('#drawings').onclick = () => drawingsModal('plan');
-  $('#reset').onclick = () => { if (confirm('Reset all parameters to defaults?')) applyState({ ...DEFAULTS }, 'reset'); };
+  $('#reset').onclick = async () => { if (await confirmBox('Reset all parameters to defaults?', 'Reset')) applyState({ ...DEFAULTS }, 'reset'); };
 
   const menu = $('#exportMenu');
   const items = [
@@ -290,8 +290,8 @@ function renderLog() {
 }
 
 // ------------------------------------------------------------------ library
-function saveToLibrary() {
-  const name = prompt('Save to library as:', P.name);
+async function saveToLibrary() {
+  const name = await ask('Save to library as', P.name, { ok: 'Save' });
   if (name == null) return;
   P.name = name || P.name; syncTop();
   const ok = library.add({ name: P.name, params: { ...P }, thumb: viewer.capture(420), stats: last?.stats ? { cells: last.stats.active, struts: last.stats.struts, blobVolume: last.stats.blobVolume } : null });
@@ -313,10 +313,10 @@ function renderLibrary() {
         el('div', { class: 'nm', title: it.name }, it.name),
         el('div', { class: 'dt' }, new Date(it.date).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })),
         el('div', { class: 'acts' },
-          el('button', { class: 'mini', title: 'Rename', onclick: () => { const n = prompt('Rename', it.name); if (n) { library.update(it.id, { name: n }); renderLibrary(); } } }, '✎'),
-          el('button', { class: 'mini', title: 'Notes / tags', onclick: () => { const n = prompt('Tags (comma separated)', (it.tags || []).join(', ')); if (n != null) { library.update(it.id, { tags: n.split(',').map((s) => s.trim()).filter(Boolean) }); renderLibrary(); } } }, '#'),
+          el('button', { class: 'mini', title: 'Rename', onclick: async () => { const n = await ask('Rename', it.name); if (n) { library.update(it.id, { name: n }); renderLibrary(); } } }, '✎'),
+          el('button', { class: 'mini', title: 'Notes / tags', onclick: async () => { const n = await ask('Tags (comma separated)', (it.tags || []).join(', ')); if (n != null) { library.update(it.id, { tags: n.split(',').map((s) => s.trim()).filter(Boolean) }); renderLibrary(); } } }, '#'),
           el('button', { class: 'mini', title: 'Download design JSON', onclick: () => download(`${slug(it.name)}.frameblob.json`, JSON.stringify({ app: 'frame-blob', params: it.params }, null, 1)) }, '↓'),
-          el('button', { class: 'mini danger', title: 'Delete', onclick: () => { if (confirm(`Delete "${it.name}"?`)) { library.remove(it.id); renderLibrary(); } } }, '✕'))),
+          el('button', { class: 'mini danger', title: 'Delete', onclick: async () => { if (await confirmBox(`Delete "${it.name}"?`, 'Delete')) { library.remove(it.id); renderLibrary(); } } }, '✕'))),
       (it.tags || []).length ? el('div', { class: 'tags' }, ...(it.tags || []).map((t) => el('span', {}, t))) : null));
   }
 }
@@ -444,7 +444,7 @@ function fromHash() {
 }
 async function shareLink() {
   const url = location.href.split('#')[0] + toHash(P);
-  try { await navigator.clipboard.writeText(url); toast('Share link copied'); } catch { prompt('Copy this link:', url); }
+  try { await navigator.clipboard.writeText(url); toast('Share link copied'); } catch { ask('Copy this link', url); }
 }
 
 // ------------------------------------------------------------------ keyboard
@@ -472,7 +472,7 @@ $('#libExport').onclick = () => download(`frameblob-library-${new Date().toISOSt
 $('#libImport').onclick = () => $('#importFile').click();
 $('#procSheet').onclick = exportSheet;
 $('#procLog').onclick = () => download(`frameblob-process-${Date.now()}.json`, session.exportJSON(), 'application/json');
-$('#procClear').onclick = () => { if (confirm('Clear process log and snapshots?')) { session.clear(); renderProcess(); } };
+$('#procClear').onclick = async () => { if (await confirmBox('Clear process log and snapshots?', 'Clear')) { session.clear(); renderProcess(); } };
 $('#procSnap').onclick = snapshot;
 $('#collapse').onclick = () => document.body.classList.toggle('drawer-closed');
 buildTop();
