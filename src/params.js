@@ -10,10 +10,10 @@ export const DEFAULTS = {
   // subdivision
   subdiv: 0, subSeed: 1, subRelax: 2, subRadius: 0.55,
   // frame
-  frameTopology: 'surface', cordSmooth: 2, outerEdges: true, creaseAngle: 40, cordLift: 0.5, radius: 2.2, nodeScale: 1.0, taper: 0.1, fillet: 3, skinEdges: false, frameScope: 'all', wrap: 1, cordTaut: 2, frameMesh: 'auto',
+  frameTopology: 'surface', cordSmooth: 2, outerEdges: true, creaseAngle: 40, cordLift: 0.5, radius: 2.2, nodeScale: 1.0, taper: 0.1, fillet: 3, skinEdges: false, frameScope: 'all', wrap: 0, cordTaut: 2, frameMesh: 'auto',
   // inflation
   blobSource: 'cells', blobLattice: 'random', blobCount: 14, blobSeed: 3, blobRelax: 2, blobJitter: 0.6,
-  inflate: 7, roundness: 0.7, gap: 1.0, merge: 4, variance: 0.12, skinPush: 6, grooveOn: true, groove: 1.0, grooveSoft: 2.5,
+  inflateMode: 'constrained', wallBulge: 0, inflate: 9, roundness: 0.7, gap: 1.0, merge: 3, variance: 0.12, skinPush: 0, grooveOn: true, groove: 1.0, grooveSoft: 2.5,
   // mesh
   res: 96, smooth: 2, meshMode: 'voxel', subdLevels: 1,
   // lattice deformation (FFD)
@@ -77,7 +77,9 @@ export const SCHEMA = [
     { key: 'blobCount', label: 'Blob count', min: 2, max: 120, step: 1, show: (P) => P.blobSource === 'independent' },
     { key: 'blobSeed', label: 'Blob seed', min: 1, max: 9999, step: 1, dice: true, show: (P) => P.blobSource === 'independent' },
     { key: 'blobRelax', label: 'Blob relax', min: 0, max: 8, step: 1, show: (P) => P.blobSource === 'independent' },
-    { key: 'inflate', label: 'Inflate', min: -10, max: 40, step: 0.1 },
+    { key: 'inflateMode', label: 'Inflation', type: 'select', options: { constrained: 'Held by frame (membrane)', free: 'Free (grows past frame)' }, note: 'membrane: cushions stay tied to the struts and bulge between them' },
+    { key: 'inflate', label: 'Inflate', min: -10, max: 60, step: 0.1 },
+    { key: 'wallBulge', label: 'Wall bulge', min: 0, max: 1, step: 0.01, show: (P) => P.inflateMode !== 'free', note: 'interior walls bulge too (0 = flat, equal pressure)' },
     { key: 'roundness', label: 'Pillow roundness', min: 0.05, max: 2, step: 0.01 },
     { key: 'gap', label: 'Cell gap', min: -10, max: 20, step: 0.1 },
     { key: 'merge', label: 'Metaball merge', min: 0, max: 30, step: 0.1 },
@@ -133,8 +135,8 @@ export const MATERIALS = {
 };
 
 export const PRESETS = [
-  { name: 'Pouf · fabric + glass', p: { boundary: 'ellipsoid', sizeX: 150, sizeY: 150, sizeZ: 130, lattice: 'random', count: 10, relax: 4, seed: 12, radius: 2.2, nodeScale: 1.3, taper: 0.1, fillet: 3, skinEdges: false, inflate: 8, roundness: 0.75, gap: 0.5, merge: 4, skinPush: 7, groove: 1, grooveSoft: 2.5, material: 'fabric-glass', blobSource: 'cells', subdiv: 0, cull: 0 } },
-  { name: 'Wall relief · frosted + cord', p: { boundary: 'box', sizeX: 240, sizeY: 40, sizeZ: 300, lattice: 'cubic', nx: 4, ny: 1, nz: 5, jitter: 0.3, relax: 0, seed: 4, radius: 1.8, nodeScale: 1, taper: 0, fillet: 0.8, skinEdges: true, wrap: 1, blobSource: 'independent', blobLattice: 'random', blobCount: 20, blobSeed: 8, blobRelax: 3, inflate: 2, roundness: 0.95, gap: 1.5, merge: 1.5, skinPush: 15, groove: 0.5, grooveSoft: 1.5, variance: 0.15, material: 'frosted-cord', frameShader: 'preset', subdiv: 0, cull: 0, res: 160 } },
+  { name: 'Pouf · fabric + glass', p: { boundary: 'ellipsoid', sizeX: 150, sizeY: 150, sizeZ: 130, lattice: 'random', count: 10, relax: 4, seed: 12, radius: 2.2, nodeScale: 1.3, taper: 0.1, fillet: 3, skinEdges: false, inflate: 12, roundness: 0.75, gap: 0.5, merge: 3, skinPush: 0, groove: 1, grooveSoft: 2.5, material: 'fabric-glass', blobSource: 'cells', subdiv: 0, cull: 0 } },
+  { name: 'Wall relief · frosted + cord', p: { boundary: 'box', sizeX: 240, sizeY: 40, sizeZ: 300, lattice: 'cubic', nx: 4, ny: 1, nz: 5, jitter: 0.3, relax: 0, seed: 4, radius: 1.8, nodeScale: 1, taper: 0, fillet: 0.8, skinEdges: true, wrap: 1, inflateMode: 'free', blobSource: 'independent', blobLattice: 'random', blobCount: 20, blobSeed: 8, blobRelax: 3, inflate: 2, roundness: 0.95, gap: 1.5, merge: 1.5, skinPush: 15, groove: 0.5, grooveSoft: 1.5, variance: 0.15, material: 'frosted-cord', frameShader: 'preset', subdiv: 0, cull: 0, res: 160 } },
   { name: 'Kelvin block · plaster', p: { frameTopology: 'cage', wrap: 0, boundary: 'box', sizeX: 200, sizeY: 200, sizeZ: 200, lattice: 'bcc', nx: 3, ny: 3, nz: 3, jitter: 0, relax: 0, radius: 3, nodeScale: 1.6, taper: 0.25, fillet: 4, skinEdges: true, blobSource: 'cells', inflate: 4, roundness: 0.5, gap: 2, merge: 2, skinPush: 2, groove: 1, variance: 0, material: 'plaster', frameShader: 'preset', meshMode: 'subd', subdLevels: 1, res: 72, subdiv: 0, cull: 0 } },
   { name: 'Cloud pavilion · ETFE', p: { boundary: 'dome', sizeX: 320, sizeY: 260, sizeZ: 150, lattice: 'random', count: 26, relax: 3, seed: 21, radius: 2.6, nodeScale: 1.4, taper: 0.2, fillet: 3, skinEdges: false, subdiv: 0, blobSource: 'cells', inflate: 6, roundness: 0.6, gap: 1, merge: 3, skinPush: 10, groove: 1.2, variance: 0.2, material: 'etfe-steel', frameShader: 'preset', cull: 0 } },
   { name: 'Hex bench · clay', p: { boundary: 'box', sizeX: 420, sizeY: 130, sizeZ: 90, lattice: 'hex', nx: 6, ny: 2, nz: 1, jitter: 0.15, relax: 1, radius: 2.4, nodeScale: 1.2, taper: 0.1, fillet: 3, skinEdges: true, blobSource: 'cells', inflate: 6, roundness: 0.8, gap: 1, merge: 5, skinPush: 8, groove: 1, variance: 0.1, material: 'clay', frameShader: 'preset', subdiv: 0, cull: 0 } },

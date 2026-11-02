@@ -40,7 +40,7 @@ const CELL_KEYS = ['boundary', 'sizeX', 'sizeY', 'sizeZ', 'lattice', 'count', 'n
   'relax', 'seed', 'cull', 'disabled', 'subdiv', 'subSeed', 'subRelax', 'frameScope', 'skinEdges', 'frameTopology', 'cordSmooth', 'outerEdges', 'creaseAngle'];
 const BLOBCELL_KEYS = ['boundary', 'sizeX', 'sizeY', 'sizeZ', 'blobSource', 'blobLattice', 'blobCount', 'blobSeed', 'blobRelax', 'nx', 'ny', 'nz', 'gradAxis'];
 const FRAME_KEYS = ['radius', 'nodeScale', 'taper', 'fillet', 'subRadius', 'wrap', 'cordTaut', 'cordLift'];
-const BLOB_KEYS = ['inflate', 'roundness', 'gap', 'merge', 'variance', 'skinPush', 'blobSource'];
+const BLOB_KEYS = ['inflate', 'roundness', 'gap', 'merge', 'variance', 'skinPush', 'blobSource', 'inflateMode', 'wallBulge', 'cull', 'disabled', 'outerEdges', 'creaseAngle'];
 const GROOVE_KEYS = ['grooveOn', 'groove', 'grooveSoft'];
 
 const pick = (P, keys) => JSON.stringify(keys.map((k) => P[k]));
@@ -84,7 +84,7 @@ export function createEngine() {
       blobCells = C.blobCells;
     }
 
-    const pad = Math.max(P.inflate, 0) + Math.max(P.skinPush, 0) + P.merge + P.radius * Math.max(P.nodeScale, 1) + P.fillet + P.groove + 2;
+    const pad = Math.max(P.inflate, 0) * 1.1 + Math.max(P.skinPush, 0) + P.merge + P.radius * Math.max(P.nodeScale, 1) + P.fillet + P.groove + 2;
     const grid = makeGrid(S.boundary.bmin, S.boundary.bmax, res, pad);
 
     // 1. raw inflated field (independent of the frame)

@@ -102,6 +102,108 @@ export function frameField(g, graph, P) {
 // the metaball quality. The frame is subtracted with a clearance (`groove`)
 // so the cushions pinch where struts pass — like cords tied around balloons.
 export function blobField(g, cells, P, rand) {
+  if ((P.inflateMode || 'constrained') === 'constrained') return blobFieldConstrained(g, cells, P, rand);
+  return blobFieldFree(g, cells, P, rand);
+}
+
+// Constrained inflation: a membrane held by the frame. Each exposed face of a cell bulges outward
+// by a profile that is 0 on the face's edges (the frame) and reaches the full inflation at the
+// face centre, so the cushion stays tied to the struts as the pressure rises. Shared interior
+// walls stay flat (equal pressure on both sides).
+function blobFieldConstrained(g, cells, P, rand) {
+  const B = emptyField(g);
+  const [nx, ny] = g.dims, sxy = nx * ny, h = g.h, o = g.origin;
+  const merge = P.merge;
+  const byIndex = new Map(cells.map((c) => [c.index, c]));
+  const gamma = Math.max(0.35, 1.3 - 0.8 * P.roundness); // roundness → fuller dome, steeper rise at the frame
+  const cosC = P.outerEdges === false ? -2 : Math.cos(((P.creaseAngle ?? 40) * Math.PI) / 180);
+  for (const c of cells) {
+    if (!c.active || c.volume <= 0) continue;
+    const press = 1 + P.variance * (rand() * 2 - 1);
+    const ctr = c.centroid;
+    // planes + "membrane panels": walls are one panel each; skin facets that meet at less than the
+    // crease angle form one panel (so facets of a curved boundary are not anchors — only the frame is)
+    const pls = [], panelOf = [], panels = [];
+    for (const f of c.faces) {
+      const skin = f.kind === 'B' || (f.kind === 'P' && f.pkind === 'B');
+      const exposedWall = f.kind === 'C' && !(byIndex.get(f.nb)?.active);
+      const pl = [f.n[0], f.n[1], f.n[2], f.d - P.gap];
+      let gi = -1;
+      if (skin) gi = panels.findIndex((pn) => pn.skin && pn.planes.some((j) => pls[j][0] * pl[0] + pls[j][1] * pl[1] + pls[j][2] * pl[2] >= cosC));
+      if (gi < 0) {
+        gi = panels.length;
+        const bulge = skin ? (P.inflate + P.skinPush) * press : exposedWall ? P.inflate * press : P.inflate * press * (P.wallBulge ?? 0);
+        panels.push({ skin, bulge: Math.max(0, bulge), planes: [] });
+      }
+      panels[gi].planes.push(pls.length);
+      panelOf.push(gi);
+      pls.push(pl);
+    }
+    let inr = Infinity;
+    for (const pl of pls) inr = Math.min(inr, pl[3] - (pl[0] * ctr[0] + pl[1] * ctr[1] + pl[2] * ctr[2]));
+    if (!(inr > 0)) continue;
+    const lam = Math.max(inr * 1.2, h); // distance from the frame at which a panel reaches full bulge
+    const ks = Math.max(lam * 0.22, h * 0.5); // soft-min width
+    const np = pls.length, ng = panels.length;
+    const gv = new Float64Array(ng), ew = new Float64Array(ng), gb = panels.map((p) => p.bulge), pv = new Float64Array(np);
+    const multi = panels.map((p, k) => (p.planes.length > 1 ? k : -1)).filter((k) => k >= 0);
+    const kf = Math.max(lam * 0.12, h);
+    let maxB = 0; for (const x of gb) maxB = Math.max(maxB, x);
+    const m = maxB + merge + 2 * h;
+    const [x0, x1, y0, y1, z0, z1] = range(g,
+      [c.bbox.min[0] - m, c.bbox.min[1] - m, c.bbox.min[2] - m],
+      [c.bbox.max[0] + m, c.bbox.max[1] + m, c.bbox.max[2] + m]);
+    const skipD = merge + 3 * h + (P.grooveOn ? P.grooveSoft : 0);
+    for (let z = z0; z <= z1; z++) {
+      const pz = o[2] + z * h;
+      for (let y = y0; y <= y1; y++) {
+        const py = o[1] + y * h;
+        let idx = x0 + nx * y + sxy * z;
+        for (let x = x0; x <= x1; x++, idx++) {
+          const px = o[0] + x * h;
+          gv.fill(-Infinity);
+          for (let i = 0; i < np; i++) {
+            const pl = pls[i];
+            const v = pl[0] * px + pl[1] * py + pl[2] * pz - pl[3];
+            pv[i] = v;
+            const gi = panelOf[i];
+            if (v > gv[gi]) gv[gi] = v;
+          }
+          // multi-facet panels (curved boundaries): soft max over their facets → smooth skin
+          for (const k of multi) {
+            let s = 0;
+            for (const i of panels[k].planes) { const q = (pv[i] - gv[k]) / kf; if (q > -20) s += Math.exp(q); }
+            gv[k] += kf * Math.log(s) - kf * 0.69; // ~unbiased where two facets meet
+          }
+          let mx = -Infinity, s1 = Infinity;
+          for (let k = 0; k < ng; k++) { if (gv[k] > mx) mx = gv[k]; if (-gv[k] < s1) s1 = -gv[k]; }
+          if (mx - maxB > skipD) continue;
+          // each panel's distance to its frame = soft-min of the inside margins to the other panels
+          let S = 0;
+          for (let k = 0; k < ng; k++) { const ex = (s1 + gv[k]) / ks; ew[k] = ex > -30 ? Math.exp(ex) : 0; S += ew[k]; }
+          let d = -Infinity;
+          for (let k = 0; k < ng; k++) {
+            let v = gv[k];
+            if (gb[k] > 0) {
+              const rest = S - ew[k];
+              const e = rest > 1e-12 ? s1 - ks * Math.log(rest) : lam;
+              if (e > 0) {
+                const tt = Math.min(e / lam, 1);
+                v -= gb[k] * Math.pow(1 - (1 - tt) * (1 - tt), gamma);
+              }
+            }
+            if (v > d) d = v;
+          }
+          const cur = B[idx];
+          B[idx] = merge > 0 ? smin(cur, d, merge) : (d < cur ? d : cur);
+        }
+      }
+    }
+  }
+  return B;
+}
+
+function blobFieldFree(g, cells, P, rand) {
   const B = emptyField(g);
   const [nx, ny] = g.dims, sxy = nx * ny, h = g.h, o = g.origin;
   const merge = P.merge;
