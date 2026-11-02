@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>FRAME/BLOB — inflated lattice modeller</title>
+  <link rel="stylesheet" href="./src/style.css" />
+  <script type="importmap">
+    { "imports": { "three": "./vendor/three/three.module.js", "three/addons/": "./vendor/three/addons/" } }
+  </script>
+</head>
+<body>
+  <header id="top">
+    <div class="brand"><span class="mark"></span><b>FRAME</b><i>/</i><b>BLOB</b></div>
+    <input id="name" class="name" spellcheck="false" />
+    <div class="grp" id="views"></div>
+    <div class="grp" id="toggles"></div>
+    <select id="material" title="Material preset"></select>
+    <div class="grp">
+      <button id="editCells" title="Edit cells: click to toggle (E)">✂ Cells</button>
+      <button id="undo" title="Undo (Ctrl+Z)">↶</button>
+      <button id="redo" title="Redo (Ctrl+Shift+Z)">↷</button>
+    </div>
+    <div class="grp right">
+      <button id="snap" title="Capture iteration (S)">◉ Snap</button>
+      <button id="vary" title="Generate variations (V)">⁂ Vary</button>
+      <button id="drawings" title="Plan / elevation drawings (D)">▦ Draw</button>
+      <button id="save" class="pri" title="Save to library (Ctrl+S)">★ Save</button>
+      <div class="dd">
+        <button id="exportBtn">Export ▾</button>
+        <div id="exportMenu" class="menu"></div>
+      </div>
+      <button id="openBtn" title="Open design / library JSON">Open</button>
+      <input id="importFile" type="file" accept=".json,application/json" hidden />
+    </div>
+  </header>
+
+  <main>
+    <aside id="left">
+      <div id="panel"></div>
+      <div class="left-foot"><button id="reset" class="mini">Reset defaults</button><span class="hint">Alt-drag numbers to scrub</span></div>
+    </aside>
+
+    <section id="stage">
+      <div id="viewport"></div>
+      <div id="busy"><span></span>computing</div>
+      <div id="vlabel"></div>
+    </section>
+
+    <aside id="right">
+      <button id="collapse" title="Toggle drawer">⟩</button>
+      <nav class="tabs">
+        <button data-tab="library" class="on">Library</button>
+        <button data-tab="process">Process</button>
+        <button data-tab="ideas">Ideas</button>
+      </nav>
+      <div class="tab on" id="tab-library">
+        <div class="tab-bar"><input id="libSearch" placeholder="Search name / tag" /><button id="libImport" class="mini">Import</button><button id="libExport" class="mini">Export</button></div>
+        <div id="lib" class="cards"></div>
+      </div>
+      <div class="tab" id="tab-process">
+        <div class="tab-bar"><button id="procSnap" class="mini">◉ Snapshot</button><button id="procSheet" class="mini">Iteration sheet</button><button id="procLog" class="mini">Log JSON</button><button id="procClear" class="mini danger">Clear</button></div>
+        <div id="snaps" class="snaps"></div>
+        <div class="h">Log</div>
+        <div id="log" class="log"></div>
+      </div>
+      <div class="tab" id="tab-ideas"><div id="ideas"></div></div>
+    </aside>
+  </main>
+
+  <footer id="status"><div id="stats">…</div><div class="keys"><kbd>1–5</kbd> views <kbd>Q</kbd> quad <kbd>F</kbd> fit <kbd>S</kbd> snapshot <kbd>E</kbd> edit cells <kbd>V</kbd> variations <kbd>D</kbd> drawings</div></footer>
+
+  <script type="module" src="./src/main.js"></script>
+</body>
+</html>
