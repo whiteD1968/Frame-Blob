@@ -6,9 +6,12 @@ import { Library, Session, History, iterationSheet } from './store.js';
 import { download, slug, exportSTL, exportOBJ, exportGLB, exportPNG, cutListCSV } from './exporters.js';
 import { drawingToSVG, drawingToDXF } from './geom/drawing.js';
 import { PRODUCTS, ROADMAP } from './ideas.js';
+import { LatticeEditor } from './lattice.js';
+import { latticeBounds, makeLattice, resampleLattice, normalisedDeltas, isIdentity, unwarpPoint, warpPoint } from './geom/ffd.js';
 
 const $ = (s) => document.querySelector(s);
-const STAGE_DISPLAY = new Set(['material', 'showFrame', 'showBlob', 'showCells', 'showSeeds', 'showGround', 'cut', 'contours', 'centerlines', 'drawScale', 'units', 'name']);
+const STAGE_DISPLAY = new Set(['material', 'showFrame', 'showBlob', 'showCells', 'showSeeds', 'showGround', 'cut', 'contours', 'centerlines', 'drawScale', 'units', 'name',
+  'lighting', 'exposure', 'frameShader', 'frameColor', 'xray', 'blobShader', 'blobOpacity', 'wire', 'wireColor', 'zebraFreq', 'ffdFalloff', 'ffdStrength', 'showLattice']);
 
 // ------------------------------------------------------------------ state
 const library = new Library();
@@ -18,6 +21,8 @@ const P = { ...DEFAULTS, ...(fromHash() || session.last || {}) };
 let committed = { ...P };
 let last = null; // last geometry result
 let editCells = false;
+let editLattice = false;
+let curL = null; // current lattice
 
 // ------------------------------------------------------------------ geometry backend (worker w/ fallback)
 let worker = null, engine = null, jobId = 0, busy = false, pending = null;
@@ -45,7 +50,7 @@ function send(job) {
   else if (engine) {
     setTimeout(() => {
       try {
-        const out = job.type === 'run' ? engine.run(job.P, job.res) : engine.drawing(job.view, job.opts, job.show);
+        const out = job.type === 'run' ? engine.run(job.P, job.res) : engine.drawing(job.view, job.opts, job.show, job.lattice);
         onResult({ id, type: job.type, out, res: job.res });
       } catch (err) { onResult({ id, type: job.type, error: String(err.stack || err) }); }
     }, 0);
@@ -71,6 +76,7 @@ function onResult(msg) {
     last.__res = msg.res;
     viewer.setGeometry(msg.out);
     viewer.setDisplay(P);
+    updateLattice();
     updateStats();
   }
   if (w) { waiters.delete(msg.id); msg.error ? w.reject(msg.error) : w.resolve(msg.out); }
@@ -88,13 +94,37 @@ function rebuild(final) {
 // ------------------------------------------------------------------ viewer
 const viewer = new Viewer($('#viewport'));
 viewer.setMaterial(P.material);
+const lattice = new LatticeEditor(viewer, {
+  getSettings: () => ({ falloff: P.ffdFalloff, strength: P.ffdStrength }),
+  onChange: (L, final) => {
+    viewer.applyWarp(true);
+    if (final) {
+      P.ffdDeltas = isIdentity(L) ? null : normalisedDeltas(L);
+      commit('lattice deform');
+      updateStats();
+    }
+  },
+});
 
 // ------------------------------------------------------------------ panel
 const panel = buildPanel($('#panel'), SCHEMA, P, (key, value, final) => setParam(key, value, final));
 
 function setParam(key, value, final) {
+  if (key[0] === '@') { action(key.slice(1)); return; }
+  if (key === 'ffdX' || key === 'ffdY' || key === 'ffdZ') {
+    const old = curL;
+    P[key] = value;
+    if (old && last) {
+      const nl = resampleLattice(old, makeLattice(latticeBounds(last.stats, P), { ...P, ffdDeltas: null }));
+      P.ffdDeltas = isIdentity(nl) ? null : normalisedDeltas(nl);
+    }
+    updateLattice();
+    if (final) commit();
+    return;
+  }
   P[key] = value;
-  if (key === 'lattice' || key === 'blobSource') panel.sync();
+  if (key === 'showLattice') lattice.setVisible(P.showLattice || editLattice);
+  if (['lattice', 'blobSource', 'meshMode', 'blobShader'].includes(key)) panel.sync();
   if (STAGE_DISPLAY.has(key)) { viewer.setDisplay(P); if (final) commit(); syncTop(); return; }
   // changing the cell structure invalidates manual toggles
   if (final && ['lattice', 'count', 'nx', 'ny', 'nz', 'seed', 'boundary', 'relax', 'jitter', 'gradient', 'gradAxis'].includes(key) && P.disabled.length) {
@@ -102,6 +132,33 @@ function setParam(key, value, final) {
   }
   rebuild(final);
   if (final) commit();
+}
+
+function action(a) {
+  if (a === 'latticeEdit') toggleLattice();
+  if (a === 'latticeReset') { P.ffdDeltas = null; updateLattice(); commit('lattice reset'); toast('Lattice reset'); }
+}
+
+// ------------------------------------------------------------------ lattice (FFD)
+function updateLattice() {
+  if (!last) return;
+  curL = makeLattice(latticeBounds(last.stats, P), P);
+  viewer.setLattice(curL);
+  lattice.setLattice(curL);
+  lattice.setVisible(P.showLattice || editLattice);
+}
+function toggleLattice(force) {
+  editLattice = force ?? !editLattice;
+  if (editLattice && editCells) { editCells = false; }
+  lattice.setEnabled(editLattice);
+  lattice.setVisible(P.showLattice || editLattice);
+  $('#latbar').classList.toggle('on', editLattice);
+  syncTop();
+  if (editLattice) toast('Lattice: click / Shift / Ctrl / drag-box to select · RMB orbit · MMB pan');
+}
+function setLatMode(m) {
+  lattice.setMode(m);
+  document.querySelectorAll('#latbar [data-mode]').forEach((b) => b.classList.toggle('on', b.dataset.mode === m));
 }
 
 function commit(action) {
@@ -139,6 +196,7 @@ function syncTop() {
   $('#material').value = P.material;
   $('#name').value = P.name;
   $('#editCells').classList.toggle('on', editCells);
+  $('#editLattice').classList.toggle('on', editLattice);
   $('#viewport').classList.toggle('editing', editCells);
 }
 
@@ -152,7 +210,12 @@ function buildTop() {
   for (const [k, v] of Object.entries(MATERIALS)) ms.append(el('option', { value: k }, v));
   ms.onchange = () => setParam('material', ms.value, true);
   $('#name').onchange = (e) => setParam('name', e.target.value || 'Untitled study', true);
-  $('#editCells').onclick = () => { editCells = !editCells; syncTop(); toast(editCells ? 'Edit cells: click a cushion/strut to toggle its cell' : 'Edit cells off'); };
+  $('#editLattice').onclick = () => toggleLattice();
+  document.querySelectorAll('#latbar [data-mode]').forEach((b) => (b.onclick = () => setLatMode(b.dataset.mode)));
+  $('#latAll').onclick = () => lattice.selectAll();
+  $('#latReset').onclick = () => action('latticeReset');
+  $('#latDone').onclick = () => toggleLattice(false);
+  $('#editCells').onclick = () => { editCells = !editCells; if (editCells && editLattice) toggleLattice(false); syncTop(); toast(editCells ? 'Edit cells: click a cushion/strut to toggle its cell' : 'Edit cells off'); };
   $('#undo').onclick = undo; $('#redo').onclick = redo;
   $('#snap').onclick = snapshot;
   $('#save').onclick = saveToLibrary;
@@ -172,7 +235,7 @@ function buildTop() {
     ['Plan / elevations (SVG · DXF)…', () => drawingsModal('plan')],
     ['PNG · current view (2×)', () => exportPNG(viewer, P.name, viewer.quad ? 'quad' : viewer.view)],
     ['Data', null],
-    ['Cut list · struts & nodes (CSV)', () => last && download(`${slug(P.name)}-cutlist.csv`, cutListCSV(last.graph, P), 'text/csv')],
+    ['Cut list · struts & nodes (CSV)', () => last && download(`${slug(P.name)}-cutlist.csv`, cutListCSV(warpedGraph(), P), 'text/csv')],
     ['Design parameters (JSON)', () => download(`${slug(P.name)}.frameblob.json`, JSON.stringify({ app: 'frame-blob', params: P }, null, 1), 'application/json')],
     ['Iteration sheet (PNG)', exportSheet],
     ['Process log (JSON)', () => download(`frameblob-process-${Date.now()}.json`, session.exportJSON(), 'application/json')],
@@ -199,6 +262,14 @@ function buildTop() {
   };
 }
 
+function warpedGraph() {
+  const g = last.graph;
+  if (!curL || isIdentity(curL)) return g;
+  const nodes = g.nodes.map((n) => warpPoint(curL, n));
+  const edges = g.edges.map((e) => ({ ...e, length: Math.hypot(...[0, 1, 2].map((k) => nodes[e.a][k] - nodes[e.b][k])) }));
+  return { nodes, edges, valence: g.valence };
+}
+
 async function ensureFullGeo() {
   if (last && last.__res === P.res) return;
   await request({ type: 'run', P: { ...P }, res: P.res });
@@ -219,7 +290,7 @@ function updateStats() {
     `blob <b>${vol(s.blobVolume)}</b>`,
     `frame <b>${vol(s.frameVolume)}</b>`,
     `envelope ${size} ${u}`,
-    `${((s.frameTris + s.blobTris) / 1000).toFixed(0)}k tris`,
+    `${((s.frameTris + s.blobTris) / 1000).toFixed(0)}k tris${s.subdLevels ? ` · SubD ${s.subdLevels}` : ''}${curL && !isIdentity(curL) ? ' · lattice on' : ''}`,
     `<span class="dim">${Math.round(T.cells + T.frame + T.blob + T.mesh)} ms · grid ${s.grid}</span>`,
   ].join('<i></i>') + (s.voxel && P.radius < s.voxel * 0.8 && P.showFrame ? `<i></i><span class="warn">struts thinner than voxel (${s.voxel.toFixed(1)}) — raise Mesh › Resolution</span>` : '');
 }
@@ -234,8 +305,10 @@ $('#viewport').addEventListener('pointerdown', (e) => { downAt = [e.clientX, e.c
 $('#viewport').addEventListener('pointerup', (e) => {
   if (!editCells || !downAt || !last) return;
   if (Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 4) return;
-  const p = viewer.pick(e);
-  if (!p) return;
+  const hit = viewer.pick(e);
+  if (!hit) return;
+  const q = curL && !isIdentity(curL) ? unwarpPoint(curL, [hit.x, hit.y, hit.z]) : [hit.x, hit.y, hit.z];
+  const p = { x: q[0], y: q[1], z: q[2] };
   let best = -1, bd = Infinity;
   for (const c of last.cells) {
     const d = (c.seed[0] - p.x) ** 2 + (c.seed[1] - p.y) ** 2 + (c.seed[2] - p.z) ** 2;
@@ -245,7 +318,7 @@ $('#viewport').addEventListener('pointerup', (e) => {
   const set = new Set(P.disabled);
   set.has(best) ? set.delete(best) : set.add(best);
   P.disabled = [...set];
-  viewer.flash(p, Math.max(P.radius * 2, 3));
+  viewer.flash(hit, Math.max(P.radius * 2, 3));
   rebuild(true);
   commit('toggle cell ' + best);
 });
@@ -371,7 +444,7 @@ async function drawingsModal(view) {
     tabs.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === cur));
     prev.textContent = 'Computing…';
     const opts = { cut: cur === 'plan' ? P.cut : P.cut > 0 ? P.cut : null, contours: P.contours, centerlines: P.centerlines, useModelBounds: true };
-    const d = await request({ type: 'drawing', view: cur, opts, show: { blob: P.showBlob, frame: P.showFrame, centerlines: P.centerlines } });
+    const d = await request({ type: 'drawing', view: cur, opts, show: { blob: P.showBlob, frame: P.showFrame, centerlines: P.centerlines }, lattice: curL && !isIdentity(curL) ? curL : null });
     if (!d) { prev.textContent = 'No geometry'; return; }
     const s = last.stats;
     const meta = { name: P.name, date: new Date().toLocaleDateString(), scale: P.drawScale, units: P.units, cutLabel: P.cut > 0 ? `cut @ ${(P.cut * 100).toFixed(0)}%` : '', stats: `${s.active} cells · ${s.struts} struts · ${s.nodes} nodes` };
@@ -455,12 +528,22 @@ window.addEventListener('keydown', (e) => {
   if ((e.ctrlKey || e.metaKey) && k === 'y') { e.preventDefault(); redo(); return; }
   if ((e.ctrlKey || e.metaKey) && k === 's') { e.preventDefault(); saveToLibrary(); return; }
   if (e.ctrlKey || e.metaKey || e.altKey) return;
+  if (editLattice) {
+    if (k === 'w') { setLatMode('translate'); return; }
+    if (k === 'r') { setLatMode('rotate'); return; }
+    if (k === 't') { setLatMode('scale'); return; }
+    if (k === 'a') { lattice.selectAll(); return; }
+    if (k === 'escape') { if (lattice.sel.size) lattice.clear(); else toggleLattice(false); return; }
+  }
+  if (k === 'l') { toggleLattice(); return; }
+  if (k === 'x') { setParam('xray', !P.xray, true); panel.sync(); return; }
   const map = { 1: 'persp', 2: 'axon', 3: 'plan', 4: 'front', 5: 'side' };
   if (map[k]) { viewer.setView(map[k]); syncTop(); }
   else if (k === 'q') { viewer.setView('quad'); syncTop(); }
   else if (k === 'f') viewer.fitAll();
   else if (k === 's') snapshot();
   else if (k === 'e') $('#editCells').click();
+  else if (k === 'escape' && editLattice) toggleLattice(false);
   else if (k === 'v') variations();
   else if (k === 'd') drawingsModal('plan');
 });
@@ -481,4 +564,4 @@ renderLibrary(); renderProcess(); renderIdeas();
 history.push(P);
 session.add('open', P.name);
 rebuild(true);
-window.FB = { get P() { return P; }, viewer, get last() { return last; }, setParam, applyState };
+window.FB = { get P() { return P; }, viewer, lattice, get L() { return curL; }, get last() { return last; }, setParam, applyState, toggleLattice };

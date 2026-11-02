@@ -1,7 +1,11 @@
-// Frame/Blob — viewport: cameras (persp / axon / plan / front / side / quad), materials, picking
+// Frame/Blob — viewport: cameras (persp / axon / plan / front / side / quad), studio lighting,
+// shader stack, wire overlays, X-ray frame, lattice-warped display, picking
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/RoomEnvironment.js';
+import { studioEnvironment, studioRig, placeRig, FadingGrid, FOIL, MATTE, styledMaterial, IRI_UNIFORMS,
+  fresnelMaterial, zebraMaterial, ghostMaterial, backfaceMaterial, cavityMaterial } from './shaders.js';
+import { warpPositions, isIdentity } from './geom/ffd.js';
 
 THREE.Object3D.DEFAULT_UP.set(0, 0, 1);
 
@@ -15,7 +19,6 @@ const VIEW_DIRS = {
 };
 
 function makeFabricTexture() {
-  // subtle woven bump for the fabric look
   const s = 256, c = document.createElement('canvas');
   c.width = c.height = s;
   const g = c.getContext('2d');
@@ -29,39 +32,32 @@ function makeFabricTexture() {
   g.putImageData(img, 0, 0);
   const t = new THREE.CanvasTexture(c);
   t.wrapS = t.wrapT = THREE.RepeatWrapping;
-  t.repeat.set(12, 12);
   return t;
 }
 
 export class Viewer {
   constructor(container) {
     this.container = container;
-    this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
+    this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true, powerPreference: 'high-performance' });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
-    this.renderer.toneMapping = THREE.NeutralToneMapping;
-    this.renderer.toneMappingExposure = 1.0;
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.12;
     container.appendChild(this.renderer.domElement);
 
     this.scene = new THREE.Scene();
-    const pm = new THREE.PMREMGenerator(this.renderer);
-    this.envTex = pm.fromScene(new RoomEnvironment(), 0.04).texture;
-    this.scene.environment = this.envTex;
-    this.scene.environmentIntensity = 0.9;
+    this.scene.environmentRotation.set(Math.PI / 2, 0, 0); // Y-up environments → Z-up world
+    this.envs = {};
 
-    this.key = new THREE.DirectionalLight(0xffffff, 1.6);
-    this.key.castShadow = true;
-    this.key.shadow.mapSize.set(2048, 2048);
-    this.key.shadow.bias = -0.0004;
-    this.key.shadow.normalBias = 0.02;
-    this.scene.add(this.key, this.key.target);
-    this.scene.add(new THREE.HemisphereLight(0xffffff, 0xd8d4cc, 0.35));
+    this.rig = studioRig();
+    this.scene.add(this.rig);
 
     this.ground = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.ShadowMaterial({ opacity: 0.16 }));
     this.ground.receiveShadow = true;
     this.scene.add(this.ground);
-    this.grid = null;
+    this.grid = new FadingGrid();
+    this.scene.add(this.grid.mesh);
 
     this.group = new THREE.Group();
     this.scene.add(this.group);
@@ -69,7 +65,13 @@ export class Viewer {
     this.fabricTex = makeFabricTexture();
     this.frameMesh = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshStandardMaterial());
     this.blobMesh = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshStandardMaterial());
-    this.blobWire = new THREE.LineSegments(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.08 }));
+    this.frameXray = new THREE.Mesh(this.frameMesh.geometry, fresnelMaterial({ xray: true, color: 0x1d6f8a, rim: 0x9fe6ff }));
+    this.frameXray.renderOrder = 20;
+    this.frameMesh.renderOrder = 1;
+    this.wireMat = new THREE.LineBasicMaterial({ color: 0x3a3f3a, transparent: true, opacity: 0.35, depthWrite: false });
+    this.frameWire = new THREE.LineSegments(new THREE.BufferGeometry(), this.wireMat);
+    this.blobWire = new THREE.LineSegments(new THREE.BufferGeometry(), this.wireMat);
+    this.frameWire.renderOrder = this.blobWire.renderOrder = 5;
     for (const m of [this.frameMesh, this.blobMesh]) { m.castShadow = true; m.receiveShadow = true; }
     this.cellLines = new THREE.LineSegments(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: 0xc0392b, transparent: true, opacity: 0.55 }));
     this.subLines = new THREE.LineSegments(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: 0x2b6cc0, transparent: true, opacity: 0.4 }));
@@ -77,8 +79,8 @@ export class Viewer {
     this.offPts = new THREE.Points(new THREE.BufferGeometry(), new THREE.PointsMaterial({ color: 0x888888, size: 5, sizeAttenuation: false }));
     this.highlight = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 12), new THREE.MeshBasicMaterial({ color: 0xc0392b, transparent: true, opacity: 0.85, depthTest: false }));
     this.highlight.visible = false;
-    this.highlight.renderOrder = 10;
-    this.group.add(this.blobMesh, this.blobWire, this.frameMesh, this.cellLines, this.subLines, this.seedPts, this.offPts, this.highlight);
+    this.highlight.renderOrder = 30;
+    this.group.add(this.blobMesh, this.frameMesh, this.frameXray, this.blobWire, this.frameWire, this.cellLines, this.subLines, this.seedPts, this.offPts, this.highlight);
 
     // cameras
     this.cams = {
@@ -90,25 +92,27 @@ export class Viewer {
     };
     this.cams.plan.up.set(0, 1, 0);
     this.controls = {};
+    this.dirty = true;
     for (const n of VIEW_NAMES) {
       const c = new OrbitControls(this.cams[n], this.renderer.domElement);
       c.enableDamping = true; c.dampingFactor = 0.12;
       c.screenSpacePanning = true;
       if (n === 'plan' || n === 'front' || n === 'side') c.enableRotate = false;
       c.enabled = false;
+      c.addEventListener('change', () => (this.dirty = true));
       this.controls[n] = c;
     }
     this.view = 'persp';
     this.quad = false;
+    this.listeners = new Set();
     this.bounds = new THREE.Box3(new THREE.Vector3(-80, -80, 0), new THREE.Vector3(80, 80, 130));
+    this.lattice = null;
+    this.rest = null;
     this.setView('persp', true);
 
     this.renderer.domElement.addEventListener('pointerdown', (e) => this._quadPointer(e), { capture: true });
     new ResizeObserver(() => this.resize()).observe(container);
     this.resize();
-    // render on demand: only when the camera moves or something calls invalidate()
-    this.dirty = true;
-    for (const n of VIEW_NAMES) this.controls[n].addEventListener('change', () => (this.dirty = true));
     const loop = () => {
       requestAnimationFrame(loop);
       for (const n of VIEW_NAMES) if (this.controls[n].enabled) this.controls[n].update();
@@ -118,6 +122,8 @@ export class Viewer {
   }
 
   invalidate() { this.dirty = true; }
+  get camera() { return this.cams[this.view]; }
+  onViewChange(fn) { this.listeners.add(fn); }
 
   resize() {
     this.dirty = true;
@@ -128,7 +134,7 @@ export class Viewer {
     this._updateFrustums();
   }
 
-  _aspectFor(name) {
+  _aspectFor() {
     const w = this.container.clientWidth, h = this.container.clientHeight;
     return this.quad ? (w / 2) / (h / 2) : w / Math.max(h, 1);
   }
@@ -188,10 +194,10 @@ export class Viewer {
 
   _activate(name) {
     for (const n of VIEW_NAMES) this.controls[n].enabled = n === name;
+    for (const fn of this.listeners) fn(name);
   }
 
   _quadLayout() {
-    // [name, x, y, w, h] in CSS px (y from bottom for WebGL viewport)
     const w = this.container.clientWidth, h = this.container.clientHeight;
     const hw = w / 2, hh = h / 2;
     return [['persp', 0, hh, hw, hh], ['axon', hw, hh, hw, hh], ['plan', 0, 0, hw, hh], ['front', hw, 0, hw, hh]];
@@ -202,13 +208,24 @@ export class Viewer {
     const r = this.renderer.domElement.getBoundingClientRect();
     const x = e.clientX - r.left, y = r.bottom - e.clientY;
     for (const [n, qx, qy, qw, qh] of this._quadLayout()) {
-      if (x >= qx && x < qx + qw && y >= qy && y < qy + qh) { this.view = n; this._activate(n); break; }
+      if (x >= qx && x < qx + qw && y >= qy && y < qy + qh) { if (this.view !== n) { this.view = n; this._activate(n); } break; }
     }
   }
 
-  fitAll() {
-    for (const n of VIEW_NAMES) this.fit(n, true);
+  // viewport rect + camera under a client point
+  viewAt(clientX, clientY) {
+    const r = this.renderer.domElement.getBoundingClientRect();
+    const x = clientX - r.left, y = clientY - r.top;
+    if (this.quad) {
+      for (const [n, qx, qy, qw, qh] of this._quadLayout()) {
+        const top = r.height - qy - qh;
+        if (x >= qx && x < qx + qw && y >= top && y < top + qh) return { cam: this.cams[n], x: qx, y: top, w: qw, h: qh, rect: r };
+      }
+    }
+    return { cam: this.cams[this.view], x: 0, y: 0, w: r.width, h: r.height, rect: r };
   }
+
+  fitAll() { for (const n of VIEW_NAMES) this.fit(n, true); }
 
   render() {
     const R = this.renderer;
@@ -228,44 +245,74 @@ export class Viewer {
     R.setScissorTest(false);
   }
 
-  // ------------------------------------------------------------ geometry
+  // ------------------------------------------------------------ geometry (+ lattice warp)
   setGeometry(out) {
     this.dirty = true;
+    this.rest = out;
     const mk = (m) => {
       const g = new THREE.BufferGeometry();
-      g.setAttribute('position', new THREE.BufferAttribute(m.positions, 3));
-      g.setAttribute('normal', new THREE.BufferAttribute(m.normals, 3));
+      g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(m.positions), 3));
+      g.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(m.normals), 3));
       g.setIndex(new THREE.BufferAttribute(m.indices, 1));
-      // planar-ish UVs for the fabric bump (triplanar would be nicer; this is cheap)
       const p = m.positions, uv = new Float32Array((p.length / 3) * 2);
-      for (let i = 0, j = 0; i < p.length; i += 3, j += 2) { uv[j] = (p[i] + p[i + 2] * 0.7) / 60; uv[j + 1] = (p[i + 1] + p[i + 2] * 0.7) / 60; }
+      for (let i = 0, j = 0; i < p.length; i += 3, j += 2) { uv[j] = (p[i] + p[i + 2] * 0.7) / 6; uv[j + 1] = (p[i + 1] + p[i + 2] * 0.7) / 6; }
       g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
-      g.computeBoundingBox(); g.computeBoundingSphere();
+      return g;
+    };
+    const wireGeo = (geo, wire) => {
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', geo.attributes.position); // shared: warps along with the mesh
+      if (wire) g.setIndex(new THREE.BufferAttribute(wire, 1));
       return g;
     };
     this.frameMesh.geometry.dispose(); this.frameMesh.geometry = mk(out.frame);
     this.blobMesh.geometry.dispose(); this.blobMesh.geometry = mk(out.blob);
-    this.blobWire.geometry.dispose();
-    this.blobWire.geometry = new THREE.WireframeGeometry(this.blobMesh.geometry);
+    this.frameXray.geometry = this.frameMesh.geometry;
+    this.frameWire.geometry.dispose(); this.frameWire.geometry = wireGeo(this.frameMesh.geometry, out.frame.wire);
+    this.blobWire.geometry.dispose(); this.blobWire.geometry = wireGeo(this.blobMesh.geometry, out.blob.wire);
 
-    const lg = (arr) => { const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(arr, 3)); return g; };
+    const lg = (arr) => { const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(arr), 3)); return g; };
     this.cellLines.geometry.dispose(); this.cellLines.geometry = lg(out.cellLines);
     this.subLines.geometry.dispose(); this.subLines.geometry = lg(out.subLines);
     const on = [], off = [];
     for (const c of out.cells) (c.active ? on : off).push(...c.seed);
-    this.seedPts.geometry.dispose(); this.seedPts.geometry = lg(new Float32Array(on));
-    this.offPts.geometry.dispose(); this.offPts.geometry = lg(new Float32Array(off));
-
-    // bounds from geometry
-    const b = new THREE.Box3();
-    if (this.blobMesh.geometry.boundingBox && out.blob.positions.length) b.union(this.blobMesh.geometry.boundingBox);
-    if (this.frameMesh.geometry.boundingBox && out.frame.positions.length) b.union(this.frameMesh.geometry.boundingBox);
-    if (b.isEmpty()) b.set(new THREE.Vector3(...out.stats.bmin), new THREE.Vector3(...out.stats.bmax));
+    this.restAux = { cellLines: out.cellLines, subLines: out.subLines, on: new Float32Array(on), off: new Float32Array(off) };
+    this.seedPts.geometry.dispose(); this.seedPts.geometry = lg(on);
+    this.offPts.geometry.dispose(); this.offPts.geometry = lg(off);
+    this.applyWarp(false);
     const first = !this._hasGeo;
-    this.bounds.copy(b);
     this._hasGeo = true;
-    this._placeGroundAndLight();
     if (first || this.wantFit) { this.wantFit = false; for (const n of VIEW_NAMES) this.fit(n, !first); }
+  }
+
+  setLattice(L) { this.lattice = L; this.applyWarp(true); }
+
+  // Deform display meshes with the lattice (cheap: per-vertex trilinear) — Atlas applyLatticeDeformation
+  applyWarp(fast = true) {
+    if (!this.rest) return;
+    this.dirty = true;
+    const L = this.lattice, warped = L && !isIdentity(L);
+    const upd = (mesh, src) => {
+      const g = mesh.geometry, pa = g.attributes.position;
+      if (warped) pa.array.set(warpPositions(L, src.positions)); else pa.array.set(src.positions);
+      pa.needsUpdate = true;
+      if (warped) g.computeVertexNormals();
+      else { g.attributes.normal.array.set(src.normals); g.attributes.normal.needsUpdate = true; }
+      g.computeBoundingBox(); g.computeBoundingSphere();
+    };
+    upd(this.frameMesh, this.rest.frame);
+    upd(this.blobMesh, this.rest.blob);
+    const aux = (obj, arr) => { const a = obj.geometry.attributes.position; if (!a) return; a.array.set(warped ? warpPositions(L, arr) : arr); a.needsUpdate = true; obj.geometry.computeBoundingSphere(); };
+    if (this.restAux) {
+      aux(this.cellLines, this.restAux.cellLines); aux(this.subLines, this.restAux.subLines);
+      aux(this.seedPts, this.restAux.on); aux(this.offPts, this.restAux.off);
+    }
+    const b = new THREE.Box3();
+    if (this.rest.blob.positions.length) b.union(this.blobMesh.geometry.boundingBox);
+    if (this.rest.frame.positions.length) b.union(this.frameMesh.geometry.boundingBox);
+    if (b.isEmpty()) b.set(new THREE.Vector3(...this.rest.stats.bmin), new THREE.Vector3(...this.rest.stats.bmax));
+    this.bounds.copy(b);
+    if (!fast) this._placeGroundAndLight();
   }
 
   _placeGroundAndLight() {
@@ -273,52 +320,66 @@ export class Viewer {
     const r = s.length();
     this.ground.position.set(c.x, c.y, b.min.z - 0.01);
     this.ground.scale.set(r * 6, r * 6, 1);
-    this.key.position.set(c.x + r * 0.6, c.y - r * 0.9, b.max.z + r * 1.4);
-    this.key.target.position.copy(c);
-    const sc = this.key.shadow.camera;
-    sc.left = -r; sc.right = r; sc.top = r; sc.bottom = -r; sc.near = 0.1; sc.far = r * 5;
-    sc.updateProjectionMatrix();
-    if (this.grid) { this.scene.remove(this.grid); this.grid.geometry.dispose(); }
-    const step = Math.pow(10, Math.floor(Math.log10(r / 2)));
-    const n = Math.ceil((r * 2) / step);
-    this.grid = new THREE.GridHelper(n * step, n, 0x000000, 0x000000);
-    this.grid.rotation.x = Math.PI / 2;
-    this.grid.position.set(c.x, c.y, b.min.z);
-    this.grid.material.transparent = true; this.grid.material.opacity = this._dark ? 0.12 : 0.06;
-    if (this._dark) this.grid.material.color.set(0xffffff);
-    this.grid.visible = this._showGround !== false;
-    this.scene.add(this.grid);
+    placeRig(this.rig, c, r);
+    this.grid.configure(r, b.min.z - 0.02, this._dark);
+    IRI_UNIFORMS.uIriScale.value = 4 / Math.max(r, 1e-3);
   }
+
+  // ------------------------------------------------------------ display / shaders / lighting
+  setMaterial() { this._lookKey = null; this.dirty = true; }
 
   setDisplay(P) {
     this.dirty = true;
     this.frameMesh.visible = P.showFrame;
     this.blobMesh.visible = P.showBlob;
-    this.blobWire.visible = P.showBlob && P.material === 'diagram';
+    this.frameXray.visible = P.showFrame && !!P.xray;
+    const wire = P.wire || 'off';
+    this.blobWire.visible = P.showBlob && (wire === 'blob' || wire === 'both' || (wire === 'off' && P.material === 'diagram'));
+    this.frameWire.visible = P.showFrame && (wire === 'frame' || wire === 'both');
+    this.wireMat.color.set(P.wireColor || '#3a3f3a');
+    this.wireMat.opacity = P.material === 'diagram' && wire === 'off' ? 0.08 : 0.4;
     this.cellLines.visible = P.showCells;
     this.subLines.visible = P.showCells;
     this.seedPts.visible = P.showSeeds;
     this.offPts.visible = P.showSeeds;
-    this._showGround = P.showGround;
     this.ground.visible = P.showGround;
-    if (this.grid) this.grid.visible = P.showGround;
-    if (this._mat !== P.material) this.setMaterial(P.material);
+    this.grid.mesh.visible = P.showGround;
+    this.renderer.toneMappingExposure = P.exposure ?? 1.12;
+    const key = JSON.stringify([P.material, P.frameShader, P.blobShader, P.frameColor, P.blobOpacity, P.lighting, P.zebraFreq]);
+    if (this._lookKey !== key) { this._lookKey = key; this._applyLook(P); }
   }
 
-  setMaterial(name) {
-    this.dirty = true;
-    this._mat = name;
-    const dark = name === 'diagram';
+  _env(kind) {
+    if (!this.envs[kind]) {
+      if (kind === 'room') { const pm = new THREE.PMREMGenerator(this.renderer); this.envs.room = pm.fromScene(new RoomEnvironment(), 0.04).texture; pm.dispose(); }
+      else this.envs[kind] = studioEnvironment(this.renderer, { dark: kind === 'dark' });
+    }
+    return this.envs[kind];
+  }
+
+  _applyLook(P) {
+    const name = P.material;
+    const lighting = P.lighting || 'studio';
+    const dark = name === 'diagram' || lighting === 'dark';
     this._dark = dark;
     document.body.classList.toggle('dark', dark);
+    this.scene.environment = this._env(lighting);
+    this.scene.environmentIntensity = lighting === 'room' ? 0.9 : 1.0;
+    // light rig levels per lighting mode
+    const L = this.rig.userData;
+    const lv = lighting === 'room' ? [1.6, 0, 0, 0, 0, 0, 0.35] : lighting === 'dark' ? [2.4, 0.2, 2.6, 0.4, 0.5, 0.6, 0.15] : [3.6, 0.52, 0.46, 0.74, 1.1, 1.26, 0.62];
+    L.lights.forEach((l, i) => (l.intensity = lv[i]));
+    L.hemi.intensity = lv[6];
+
+    // preset materials
     let blob, frame;
     switch (name) {
       case 'frosted-cord':
         blob = new THREE.MeshPhysicalMaterial({ color: 0xe4e7e8, roughness: 0.5, transmission: 0.55, thickness: 12, ior: 1.45, attenuationColor: new THREE.Color(0xd9dfe2), attenuationDistance: 30, clearcoat: 0.4, clearcoatRoughness: 0.4 });
-        frame = new THREE.MeshStandardMaterial({ color: 0x141414, roughness: 0.55, metalness: 0.0 });
+        frame = new THREE.MeshStandardMaterial({ color: 0x141414, roughness: 0.55 });
         break;
       case 'etfe-steel':
-        blob = new THREE.MeshPhysicalMaterial({ color: 0xeef3f7, roughness: 0.32, metalness: 0, iridescence: 0.55, iridescenceIOR: 1.35, iridescenceThicknessRange: [200, 600], clearcoat: 1, clearcoatRoughness: 0.15, sheen: 0.3, sheenColor: new THREE.Color(0xdfe8ff) });
+        blob = new THREE.MeshPhysicalMaterial({ color: 0xeef3f7, roughness: 0.32, iridescence: 0.55, iridescenceIOR: 1.35, iridescenceThicknessRange: [200, 600], clearcoat: 1, clearcoatRoughness: 0.15, sheen: 0.3, sheenColor: new THREE.Color(0xdfe8ff) });
         frame = new THREE.MeshStandardMaterial({ color: 0xb9bcc0, roughness: 0.28, metalness: 1.0 });
         break;
       case 'plaster':
@@ -329,35 +390,54 @@ export class Viewer {
         blob = new THREE.MeshStandardMaterial({ color: 0xc9825f, roughness: 0.85 });
         frame = new THREE.MeshStandardMaterial({ color: 0x5b4636, roughness: 0.6 });
         break;
+      case 'foil':
+        blob = styledMaterial(FOIL);
+        frame = new THREE.MeshStandardMaterial({ color: 0x2a2d2c, roughness: 0.35, metalness: 0.6 });
+        break;
       case 'diagram':
         blob = new THREE.MeshStandardMaterial({ color: 0x9a9a9a, roughness: 0.35, metalness: 0.1, transparent: true, opacity: 0.9 });
         frame = new THREE.MeshStandardMaterial({ color: 0xf5f5f5, roughness: 0.3, emissive: 0x222222 });
         break;
       default: // fabric-glass
         blob = new THREE.MeshPhysicalMaterial({ color: 0xf7f7f5, roughness: 0.88, sheen: 1, sheenRoughness: 0.55, sheenColor: new THREE.Color(0xffffff), bumpMap: this.fabricTex, bumpScale: 0.35 });
-        frame = new THREE.MeshPhysicalMaterial({ color: 0xffffff, roughness: 0.03, transmission: 1, thickness: 3, ior: 1.5, dispersion: 2, attenuationColor: new THREE.Color(0xe8f0f0), attenuationDistance: 40, specularIntensity: 1 });
+        frame = new THREE.MeshPhysicalMaterial({ color: 0xffffff, roughness: 0.03, transmission: 1, thickness: 3, ior: 1.5, dispersion: 2, attenuationColor: new THREE.Color(0xc8dcdc), attenuationDistance: 8, specularIntensity: 1 });
     }
+    // shader overrides
+    const fc = new THREE.Color(P.frameColor || '#2b3a40');
+    switch (P.frameShader) {
+      case 'fresnel': frame = fresnelMaterial({ color: fc, rim: 0xffffff }); break;
+      case 'solid': frame = new THREE.MeshStandardMaterial({ color: fc, roughness: 0.5 }); break;
+      case 'foil': frame = styledMaterial(FOIL, fc); break;
+      case 'glass': frame = new THREE.MeshPhysicalMaterial({ color: 0xffffff, roughness: 0.04, transmission: 1, thickness: 4, ior: 1.5, attenuationColor: fc, attenuationDistance: 6, specularIntensity: 1 }); break;
+      default: break; // 'preset'
+    }
+    switch (P.blobShader) {
+      case 'foil': blob = styledMaterial(FOIL); break;
+      case 'matte': blob = styledMaterial(MATTE); break;
+      case 'ghost': blob = ghostMaterial({ opacity: 0.3 }); break;
+      case 'zebra': blob = zebraMaterial({ freq: P.zebraFreq || 14 }); break;
+      case 'cavity': blob = cavityMaterial(); break;
+      case 'normals': blob = new THREE.MeshNormalMaterial(); break;
+      case 'backfaces': blob = backfaceMaterial(); frame = backfaceMaterial(); break;
+      default: break;
+    }
+    const op = P.blobOpacity ?? 1;
+    if (op < 1 && !blob.isShaderMaterial) { blob.transparent = true; blob.opacity = op; blob.depthWrite = false; }
+    if (blob.bumpMap) blob.bumpMap.repeat.set(1, 1);
     this.blobMesh.material.dispose(); this.blobMesh.material = blob;
     this.frameMesh.material.dispose(); this.frameMesh.material = frame;
+    this.blobMesh.castShadow = !(blob.transparent && op < 0.6) && P.blobShader !== 'ghost';
     this.ground.material.opacity = dark ? 0.4 : 0.16;
-    if (this.grid) { this.grid.material.color.set(dark ? 0xffffff : 0x000000); this.grid.material.opacity = dark ? 0.12 : 0.06; }
-    this.scene.environmentIntensity = dark ? 0.5 : 0.9;
+    this.grid.configure(this.bounds.getSize(new THREE.Vector3()).length(), this.bounds.min.z - 0.02, dark);
   }
 
   // ------------------------------------------------------------ picking
   pick(e) {
-    const r = this.renderer.domElement.getBoundingClientRect();
-    let cam = this.cams[this.view], vx = 0, vy = 0, vw = r.width, vh = r.height;
-    const x = e.clientX - r.left, y = e.clientY - r.top;
-    if (this.quad) {
-      for (const [n, qx, qy, qw, qh] of this._quadLayout()) {
-        const top = r.height - qy - qh;
-        if (x >= qx && x < qx + qw && y >= top && y < top + qh) { cam = this.cams[n]; vx = qx; vy = top; vw = qw; vh = qh; }
-      }
-    }
-    const ndc = new THREE.Vector2(((x - vx) / vw) * 2 - 1, -((y - vy) / vh) * 2 + 1);
+    const v = this.viewAt(e.clientX, e.clientY);
+    const x = e.clientX - v.rect.left, y = e.clientY - v.rect.top;
+    const ndc = new THREE.Vector2(((x - v.x) / v.w) * 2 - 1, -((y - v.y) / v.h) * 2 + 1);
     const rc = new THREE.Raycaster();
-    rc.setFromCamera(ndc, cam);
+    rc.setFromCamera(ndc, v.cam);
     const targets = [this.blobMesh, this.frameMesh].filter((m) => m.visible);
     const hit = rc.intersectObjects(targets, false)[0];
     return hit ? hit.point : null;
@@ -379,7 +459,7 @@ export class Viewer {
     const c = document.createElement('canvas');
     c.width = Math.round(src.width * s); c.height = Math.round(src.height * s);
     const g = c.getContext('2d');
-    g.fillStyle = this._dark ? '#0d0d0d' : '#ecebe8';
+    g.fillStyle = this._dark ? '#0d0d0d' : '#dcdcd8';
     g.fillRect(0, 0, c.width, c.height);
     g.drawImage(src, 0, 0, c.width, c.height);
     return c.toDataURL(type, 0.85);
@@ -388,7 +468,7 @@ export class Viewer {
   captureHiRes(scale = 2) {
     const w = this.container.clientWidth, h = this.container.clientHeight;
     const pr = this.renderer.getPixelRatio();
-    scale = Math.min(scale, 4096 / (w * pr)); // keep under ~4k px wide
+    scale = Math.min(scale, 4096 / (w * pr));
     this.renderer.setPixelRatio(pr * scale);
     this.renderer.setSize(w, h, false);
     this.render();
@@ -396,7 +476,7 @@ export class Viewer {
     const src = this.renderer.domElement;
     c.width = src.width; c.height = src.height;
     const g = c.getContext('2d');
-    g.fillStyle = this._dark ? '#0d0d0d' : '#ecebe8';
+    g.fillStyle = this._dark ? '#0d0d0d' : '#dcdcd8';
     g.fillRect(0, 0, c.width, c.height);
     g.drawImage(src, 0, 0);
     this.renderer.setPixelRatio(pr);

@@ -29,7 +29,8 @@ To publish on **GitHub Pages**, go to Settings › Pages, pick "Deploy from bran
 | **Frame** | Tapered capsules + node spheres fused with polynomial smooth-min, giving filleted, SubD-looking joints. Optional **Wrap** projects skin struts onto the cushion surface as cords | radius, node bulge, taper, fillet, wrap |
 | **Blob** | Each cell becomes a pillow: shrink by gap, inset and round by *roundness × inradius*, inflate, and "bulge past skin" on outer faces. Pillows union with smooth-min (**metaball merge**). Source can be the frame cells, the sub-cells, or a completely **independent** Voronoi field | inflate, roundness, gap, merge, pressure variance, bulge |
 | **Pinch** | Blob minus (frame + clearance), smooth difference, so cushions crease where struts run | clearance, softness |
-| **Mesh** | Signed-distance grid, then Naive Surface Nets, Taubin smoothing and gradient normals. Watertight output | resolution, smoothing |
+| **Mesh** | Signed-distance grid, then Naive Surface Nets as a **quad cage**. Then either Taubin smoothing (voxel mode) or **Catmull–Clark SubD** (0–3 levels), gradient normals | surface mode, resolution, SubD levels, smoothing |
+| **Lattice FFD** | Trilinear free-form deformation over the whole result (frame + blob). Select control points, then move/rotate/scale them with falloff. Drawings, picking and the cut list follow the deformation | divisions W/D/H, falloff radius, strength |
 
 Geometry runs in a Web Worker with stage caching, so changing an inflation slider doesn't recompute the Voronoi.
 
@@ -37,12 +38,19 @@ Geometry runs in a Web Worker with stage caching, so changing an inflation slide
 
 - **Views:** Persp, Axon (true isometric ortho), Plan, Front, Side, Quad (4-up). Keys `1–5`, `Q`, `F` fit.
 - **Display:** Frame / Blob / Cells (Voronoi wire) / Seeds / Ground, plus material presets (fabric + glass, frosted + cord, ETFE + steel, plaster, terracotta, dark diagram).
+- **Lattice** (`L`): Atlas-style control lattice. Click, `Shift`-click to add, `Ctrl`-click to remove, drag a box (with `Ctrl` to deselect). The gizmo moves (`W`), rotates (`R`) or scales (`T`) the selection about its average. `A` selects all, `Esc` clears or exits. While editing, RMB orbits and MMB pans. Deformation survives division changes and model changes.
+- **Shading:** a glass-rim frame shader (readable against white cushions), **Frame X-ray** (`X`) to see struts through the blobs, foil with iridescence, matte, ghost, **zebra** (reflection lines for judging SubD continuity), cavity, normals, back-face diagnostic, blob opacity, quad wire overlay with colour.
+- **Lighting:** studio softbox environment with a key/fill/rim and accent rig, neutral room, dark studio; exposure (ACES); infinite fading grid.
 - **Edit cells** (`E`): click a cushion or strut to toggle its cell, to carve openings and rooms.
 - **Undo / redo** (`Ctrl+Z` / `Ctrl+Shift+Z`). Every committed change is logged.
 - **Snapshot** (`S`): captures an iteration (thumbnail + parameters) into the Process tab. Click a thumbnail to restore it.
 - **Variations** (`V`): generates 8 mutations (seed only / seed + form / lattice + form). Click one to adopt it, ★ to save it.
 - **Library:** ★ Save (`Ctrl+S`) stores name, thumbnail, params and stats in browser storage. Search, tag, rename, export/import as JSON.
 - **Drawings** (`D`): Plan / Front / Side with silhouette, section cut, contour slices and strut centrelines. Export **SVG** (true scale, named layers) or **DXF** (R12, layers).
+
+### Credits: Minimal Surface Atlas 3
+
+The lattice deformation, Catmull–Clark rules, studio lighting rig and softbox environment, foil and iridescence shader, fading grid and back-face diagnostic are ported from [whiteD1968/Minimal_Surface_Atlas_3](https://github.com/whiteD1968/Minimal_Surface_Atlas_3) and adapted to Z-up, mm-scale and the SDF pipeline.
 
 ## Exports
 
@@ -78,7 +86,7 @@ See the **Ideas** tab in the app. Each one links to a preset.
 - Physical inflation: dynamic-relaxation membrane (pressure vs. frame tension)
 - Attractor points and curves driving density, inflation and radius locally
 - Import any closed mesh as the boundary
-- True SubD cage around struts (Catmull–Clark), Rhino-friendly OBJ
+- Export the SubD quad cage as OBJ quads (Rhino SubD-ready)
 - Rhino / Grasshopper round-trip (`.3dm` via rhino3dm), IFC
 - Quick FE structural check on the strut graph
 - Turntable and process animation export
@@ -97,6 +105,9 @@ src/geom/voronoi.js   boundaries, seeds/lattices, convex clipping, subdivision, 
 src/geom/field.js     SDF grids: frame, blob, pinch, wrap
 src/geom/mesh.js      surface nets, Taubin smoothing, normals, volume
 src/geom/drawing.js   marching squares, projections/sections, SVG + DXF writers
+src/geom/ffd.js       lattice FFD: warp, Newton inverse, resample, falloff weights
+src/lattice.js        lattice editor: points, selection, marquee, transform gizmo
+src/shaders.js        studio env + rig, fading grid, foil/iridescence, rim, zebra, ghost, cavity, back-face
 src/exporters.js      STL / OBJ / GLB / PNG / CSV
 src/store.js          library, session log, snapshots, undo, iteration sheet
 vendor/three          three.js r187 (MIT)

@@ -28,13 +28,20 @@ export function buildPanel(root, schema, P, onChange) {
       el('span', { class: 'caret' }), sec.title);
     root.append(el('section', { class: 'sec' }, head, body));
     for (const it of sec.items) {
-      const label = it.label || it.key.charAt(0).toUpperCase() + it.key.slice(1);
+      const label = it.label || (it.key ? it.key.charAt(0).toUpperCase() + it.key.slice(1) : '');
       let row;
       if (it.type === 'select') {
         const sel = el('select', { onchange: () => onChange(it.key, sel.value, true) },
           ...Object.entries(it.options).map(([v, t]) => el('option', { value: v }, t)));
         row = el('div', { class: 'row' }, el('label', {}, label), sel);
         row._sync = () => (sel.value = P[it.key]);
+      } else if (it.type === 'buttons') {
+        row = el('div', { class: 'row btns' }, ...it.buttons.map(([t2, act]) => el('button', { class: 'mini', 'data-act': act, onclick: () => onChange('@' + act, null, true) }, t2)));
+        row._sync = () => {};
+      } else if (it.type === 'color') {
+        const ci = el('input', { type: 'color', oninput: () => onChange(it.key, ci.value, false), onchange: () => onChange(it.key, ci.value, true) });
+        row = el('div', { class: 'row' }, el('label', {}, label), ci);
+        row._sync = () => (ci.value = P[it.key]);
       } else if (it.type === 'bool') {
         const cb = el('input', { type: 'checkbox', onchange: () => onChange(it.key, cb.checked, true) });
         row = el('div', { class: 'row bool' }, el('label', {}, label), el('label', { class: 'switch' }, cb, el('span')));
