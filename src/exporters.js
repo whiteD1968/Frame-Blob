@@ -114,3 +114,40 @@ export function cutListCSV(graph, P) {
   [...bins.entries()].sort((a, b) => a[0] - b[0]).forEach(([k, v]) => rows.push(`bin,${k},${v}`));
   return rows.join('\n');
 }
+
+// Binary STL straight from typed arrays (facet normals computed here)
+export function stlFromArrays(pos, idx) {
+  const n = idx.length / 3;
+  const buf = new ArrayBuffer(84 + n * 50), dv = new DataView(buf);
+  const hdr = 'Frame/Blob print-ready STL (watertight, marching tetrahedra)';
+  for (let i = 0; i < Math.min(80, hdr.length); i++) dv.setUint8(i, hdr.charCodeAt(i));
+  dv.setUint32(80, n, true);
+  let o = 84;
+  for (let t = 0; t < idx.length; t += 3) {
+    const a = 3 * idx[t], b = 3 * idx[t + 1], c = 3 * idx[t + 2];
+    const ux = pos[b] - pos[a], uy = pos[b + 1] - pos[a + 1], uz = pos[b + 2] - pos[a + 2];
+    const vx = pos[c] - pos[a], vy = pos[c + 1] - pos[a + 1], vz = pos[c + 2] - pos[a + 2];
+    let nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+    const l = Math.hypot(nx, ny, nz) || 1;
+    dv.setFloat32(o, nx / l, true); dv.setFloat32(o + 4, ny / l, true); dv.setFloat32(o + 8, nz / l, true); o += 12;
+    for (const v of [a, b, c]) { dv.setFloat32(o, pos[v], true); dv.setFloat32(o + 4, pos[v + 1], true); dv.setFloat32(o + 8, pos[v + 2], true); o += 12; }
+    dv.setUint16(o, 0, true); o += 2;
+  }
+  return new Blob([buf], { type: 'model/stl' });
+}
+
+// OBJ with real quad faces (Rhino: Import → ToSubD; Blender: Subdivision Surface modifier)
+export function quadOBJ(parts, { units = 'mm', note = '' } = {}) {
+  const lines = [`# Frame/Blob — ${note}`, `# units: ${units} · Z-up · quads (+ triangles at cord junctions)`];
+  let base = 1;
+  for (const p of parts) {
+    lines.push(`o ${p.name}`);
+    const P = p.positions;
+    for (let i = 0; i < P.length; i += 3) lines.push(`v ${P[i].toFixed(4)} ${P[i + 1].toFixed(4)} ${P[i + 2].toFixed(4)}`);
+    const Q = p.quads || [], T = p.tris || [];
+    for (let i = 0; i < Q.length; i += 4) lines.push(`f ${Q[i] + base} ${Q[i + 1] + base} ${Q[i + 2] + base} ${Q[i + 3] + base}`);
+    for (let i = 0; i < T.length; i += 3) lines.push(`f ${T[i] + base} ${T[i + 1] + base} ${T[i + 2] + base}`);
+    base += P.length / 3;
+  }
+  return lines.join('\n') + '\n';
+}

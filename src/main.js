@@ -3,11 +3,11 @@ import { Viewer, VIEW_NAMES } from './viewer.js';
 import { DEFAULTS, SCHEMA, PRESETS, MATERIALS } from './params.js';
 import { buildPanel, el, modal, toast, ask, confirmBox } from './ui.js';
 import { Library, Session, History, iterationSheet } from './store.js';
-import { download, slug, exportSTL, exportOBJ, exportGLB, exportPNG, cutListCSV } from './exporters.js';
+import { download, slug, exportSTL, exportOBJ, exportGLB, exportPNG, cutListCSV, stlFromArrays, quadOBJ } from './exporters.js';
 import { drawingToSVG, drawingToDXF } from './geom/drawing.js';
 import { PRODUCTS, ROADMAP } from './ideas.js';
 import { LatticeEditor } from './lattice.js';
-import { latticeBounds, makeLattice, resampleLattice, normalisedDeltas, isIdentity, unwarpPoint, warpPoint } from './geom/ffd.js';
+import { latticeBounds, makeLattice, resampleLattice, normalisedDeltas, isIdentity, unwarpPoint, warpPoint, warpPositions } from './geom/ffd.js';
 
 const $ = (s) => document.querySelector(s);
 const STAGE_DISPLAY = new Set(['material', 'showFrame', 'showBlob', 'showCells', 'showSeeds', 'showGround', 'cut', 'contours', 'centerlines', 'drawScale', 'units', 'name',
@@ -50,7 +50,7 @@ function send(job) {
   else if (engine) {
     setTimeout(() => {
       try {
-        const out = job.type === 'run' ? engine.run(job.P, job.res) : engine.drawing(job.view, job.opts, job.show, job.lattice);
+        const out = job.type === 'run' ? engine.run(job.P, job.res) : job.type === 'quads' ? engine.quads(job.level, job.P) : job.type === 'printFrame' ? engine.printFrame(job.P, job.budget, job.quality) : job.type === 'printBlob' ? engine.printBlob() : engine.drawing(job.view, job.opts, job.show, job.lattice);
         onResult({ id, type: job.type, out, res: job.res });
       } catch (err) { onResult({ id, type: job.type, error: String(err.stack || err) }); }
     }, 0);
@@ -229,6 +229,13 @@ function buildTop() {
     ['STL · frame only', () => exportSTL(viewer, 'frame', P.name)],
     ['STL · blob only', () => exportSTL(viewer, 'blob', P.name)],
     ['STL · frame + blob', () => exportSTL(viewer, 'both', P.name)],
+    ['Print-ready (fused, watertight)', null],
+    ['STL · frame print-ready · draft', () => printSTL('frame', 'draft')],
+    ['STL · frame print-ready · fine', () => printSTL('frame', 'fine')],
+    ['STL · blob print-ready', () => printSTL('blob')],
+    ['Rhino / SubD', null],
+    ['OBJ · SubD control cage (quads → ToSubD)', () => subdOBJ('cage')],
+    ['OBJ · subdivided quad mesh', () => subdOBJ('final')],
     ['OBJ · both (separate objects)', () => exportOBJ(viewer, P.name)],
     ['GLB · with materials', () => exportGLB(viewer, P.name)],
     ['Drawings', null],
@@ -243,7 +250,7 @@ function buildTop() {
   ];
   for (const [t, fn] of items) {
     if (!fn) { menu.append(el('div', { class: 'mh' }, t)); continue; }
-    menu.append(el('button', { onclick: async () => { menu.classList.remove('open'); try { if (t.startsWith('STL') || t.startsWith('OBJ') || t.startsWith('GLB')) await ensureFullGeo(); await fn(); session.add('export', t); renderLog(); } catch (e) { console.error(e); toast('Export failed'); } } }, t));
+    menu.append(el('button', { onclick: async () => { menu.classList.remove('open'); try { if (/^(STL|OBJ|GLB)/.test(t)) await ensureFullGeo(); await fn(); session.add('export', t); renderLog(); } catch (e) { console.error(e); toast('Export failed'); } } }, t));
   }
   $('#exportBtn').onclick = (e) => { e.stopPropagation(); menu.classList.toggle('open'); };
   document.addEventListener('click', () => menu.classList.remove('open'));
@@ -260,6 +267,34 @@ function buildTop() {
       else toast('Unrecognised file');
     } catch { toast('Could not read file'); }
   };
+}
+
+const warpArr = (a) => (curL && !isIdentity(curL) ? warpPositions(curL, a) : a);
+
+async function printSTL(which, quality) {
+  toast(which === 'frame' ? `Fusing frame (${quality})…` : 'Re-meshing blob…', 2500);
+  const t0 = performance.now();
+  const out = await request(which === 'frame' ? { type: 'printFrame', P: { ...P }, quality } : { type: 'printBlob' });
+  if (!out) { toast('Nothing to export'); return; }
+  const tris = out.indices.length / 3;
+  download(`${slug(P.name)}-${which}-print${quality ? '-' + quality : ''}.stl`, stlFromArrays(warpArr(out.positions), out.indices), 'model/stl');
+  session.add('export', `print STL ${which}: ${(tris / 1000).toFixed(0)}k tris, voxel ${out.voxel.toFixed(2)}, ${(out.volume / 1000).toFixed(1)} cm³, ${Math.round(performance.now() - t0)} ms`);
+  renderLog();
+  toast(`Watertight ${which}: ${(tris / 1000).toFixed(0)}k triangles · ${(out.volume / 1000).toFixed(1)} cm³`);
+}
+
+async function subdOBJ(level) {
+  const q = await request({ type: 'quads', level, P: { ...P } });
+  const parts = [];
+  if (q.frame && P.showFrame) parts.push({ name: 'frame', positions: warpArr(q.frame.positions), quads: q.frame.quads, tris: q.frame.tris });
+  if (q.blob && P.showBlob) parts.push({ name: 'blob', positions: warpArr(q.blob.positions), quads: q.blob.quads, tris: q.blob.tris });
+  const nq = parts.reduce((s, p) => s + p.quads.length / 4, 0);
+  download(`${slug(P.name)}-subd-${level}.obj`, quadOBJ(parts, { units: P.units, note: level === 'cage' ? 'SubD control cage' : 'subdivided quads' }), 'text/plain');
+  const bad = (q.blob?.bad > 0 ? q.blob.bad : 0) + (q.frame?.bad > 0 ? q.frame.bad : 0);
+  session.add('export', `SubD OBJ ${level}: ${nq} quads, non-manifold edges ${bad}${q.frame?.bad === -1 ? ', cords as open tubes' : ''}`);
+  renderLog();
+  toast(`${(nq / 1000).toFixed(1)}k quads${bad ? ` · ${bad} non-manifold edges` : ' · clean manifold'} · Rhino: Import → ToSubD`, 3500);
+  if (level === 'cage' && P.meshMode !== 'subd') toast('Tip: Mesh › Surface = SubD with a low resolution (40–64) gives a lighter cage', 3500);
 }
 
 function warpedGraph() {

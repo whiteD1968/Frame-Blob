@@ -30,7 +30,7 @@ To publish on **GitHub Pages**, go to Settings › Pages, pick "Deploy from bran
 | **Frame** | Thin struts become exact **swept cords** (Catmull–Rom tubes), thicker ones a fused SDF. Tapered capsules + node spheres fused with polynomial smooth-min, giving filleted, SubD-looking joints. **Wrap** (on by default) projects cords onto a shrink-wrapped copy of the cushions so they pull taut over the crevices | frame mesh, radius, node bulge, taper, fillet, wrap, tautness |
 | **Blob** | **Held by frame (default):** a membrane tied to the struts. Each exposed panel bulges outward by a dome profile that is 0 at its frame edges and full at the centre, so raising *Inflate* balloons the cushions between the cords without swallowing them. Shared walls stay flat; skin facets of curved boundaries are merged into one smooth panel (same crease rule as the frame). **Free:** each cell becomes a pillow: shrink by gap, inset and round by *roundness × inradius*, inflate, and "bulge past skin" on outer faces. Pillows union with smooth-min (**metaball merge**). Source can be the frame cells, the sub-cells, or a completely **independent** Voronoi field | inflate, roundness, gap, merge, pressure variance, bulge |
 | **Pinch** | Blob minus (frame + clearance), smooth difference, so cushions crease where struts run | clearance, softness |
-| **Mesh** | Signed-distance grid, then Naive Surface Nets as a **quad cage**. Then either Taubin smoothing (voxel mode) or **Catmull–Clark SubD** (0–3 levels), gradient normals | surface mode, resolution, SubD levels, smoothing |
+| **Mesh** | Signed-distance grid, then manifold Surface Nets as a **quad cage**. Then either Taubin smoothing (voxel mode) or **Catmull–Clark SubD** (0–3 levels), gradient normals | surface mode, resolution, SubD levels, smoothing |
 | **Lattice FFD** | Trilinear free-form deformation over the whole result (frame + blob). Select control points, then move/rotate/scale them with falloff. Drawings, picking and the cut list follow the deformation | divisions W/D/H, falloff radius, strength |
 
 Geometry runs in a Web Worker with stage caching, so changing an inflation slider doesn't recompute the Voronoi.
@@ -57,7 +57,9 @@ The lattice deformation, Catmull–Clark rules, studio lighting rig and softbox 
 
 | Format | Contents |
 |---|---|
-| STL | frame only · blob only · combined (binary, mm) |
+| STL | frame only · blob only · combined (display meshes, binary, mm) |
+| STL · print-ready | **watertight, closed 2-manifold.** The frame is fused into one solid on a fine grid fitted to the struts (draft ≈ r/1.9, fine ≈ r/3.2 voxels), cords spline-sampled and filleted at junctions. The blob is re-meshed with marching tetrahedra. The lattice deformation is applied |
+| OBJ · SubD | **pure quads, closed manifold** for Rhino `ToSubD` / Blender Subdivision Surface: the control cage, or the cage after Catmull–Clark. Built with manifold surface nets (one vertex per surface patch) and a hair-thin offset where cushions pinch together |
 | OBJ | frame and blob as separate objects |
 | GLB | with PBR materials (Y-up converted) |
 | SVG / DXF | plan, front, side; section, contours, centrelines |
@@ -87,7 +89,6 @@ See the **Ideas** tab in the app. Each one links to a preset.
 - Physical inflation: dynamic-relaxation membrane (pressure vs. frame tension)
 - Attractor points and curves driving density, inflation and radius locally
 - Import any closed mesh as the boundary
-- Export the SubD quad cage as OBJ quads (Rhino SubD-ready)
 - Rhino / Grasshopper round-trip (`.3dm` via rhino3dm), IFC
 - Quick FE structural check on the strut graph
 - Turntable and process animation export

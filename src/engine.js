@@ -1,7 +1,7 @@
 // Frame/Blob — cached geometry pipeline (runs in a worker, or on the main thread as fallback)
 import { buildCells, buildBlobCells, mulberry32 } from './geom/voronoi.js';
 import { makeGrid, frameField, blobField, applyGroove, wrapGraph, blurField } from './geom/field.js';
-import { polygonise, meshVolume, meshArea, cordMesh } from './geom/mesh.js';
+import { polygonise, meshVolume, meshArea, cordMesh, cordChains, marchingTets, cleanCage } from './geom/mesh.js';
 import { computeDrawing } from './geom/drawing.js';
 import { isIdentity, warpPoint, unwarpPoint } from './geom/ffd.js';
 import { sampleField } from './geom/field.js';
@@ -196,5 +196,62 @@ export function createEngine() {
     return computeDrawing({ grid: g, blobF: B, frameF: F, graph, bounds: realBounds, show }, view, opts);
   }
 
-  return { run, drawing };
+  // Quad meshes for SubD-ready OBJ: `cage` = clean control cage, `final` = cage after Catmull–Clark.
+  // Cages are rebuilt on a hair-thin inward offset when needed so every edge has exactly two quads.
+  function quads(level, P) {
+    const levels = level === 'cage' ? 0 : Math.max(1, P?.subdLevels || 1);
+    const smooth = P?.smooth ?? 2;
+    const blob = C.B ? cleanCage(C.B, C.grid, { smooth, levels }) : null;
+    let frame = null;
+    if (C.frameMesh) {
+      // fused field cage when struts span ≥ ~1 voxel (closed, manifold); thinner cords export as tubes
+      if (!C.cords || (P && P.radius >= C.grid.h * 0.9)) frame = cleanCage(C.F, C.grid, { smooth, levels });
+      else frame = { positions: C.frameMesh.positions.slice(), quads: C.frameMesh.quads.slice(), tris: C.frameMesh.tris.slice(), bad: -1, offset: 0 };
+    }
+    return { frame, blob };
+  }
+
+  // Print-ready frame: one fused, watertight solid on a fine grid fitted tightly around the struts.
+  // Cord chains are spline-sampled (same curves as the tube display) and fused with smooth-min.
+  function printFrame(P, budget = 8e6, quality = 'draft') {
+    if (!C.frameGraph) return null;
+    const rFor = (lvl) => (lvl === 1 ? P.radius : P.radius * P.subRadius);
+    let graph;
+    if (C.cords) {
+      const { chains, junctions } = cordChains(C.frameGraph, rFor, { step: 0.6, nodeScale: P.nodeScale });
+      const nodes = [], edges = [], valence = [];
+      for (const ch of chains) {
+        let prev = -1;
+        for (const p of ch.S) {
+          const id = nodes.length; nodes.push(p); valence.push(2);
+          if (prev >= 0) edges.push({ a: prev, b: id, level: ch.level, sub: true });
+          prev = id;
+        }
+      }
+      for (const j of junctions) { nodes.push(j.p); valence.push(j.valence); }
+      graph = { nodes, edges, valence };
+    } else graph = C.frameGraph;
+    if (!graph.edges.length) return null;
+    const rMin = Math.min(P.radius, P.subdiv > 0 ? P.radius * P.subRadius : P.radius);
+    const fillet = C.cords ? Math.max(Math.min(P.fillet || 0, rMin), rMin * 0.35) : P.fillet;
+    const Q = { ...P, fillet, nodeScale: C.cords ? Math.max(P.nodeScale, 1.02) : P.nodeScale };
+    const mn = [Infinity, Infinity, Infinity], mx = [-Infinity, -Infinity, -Infinity];
+    for (const n of graph.nodes) for (let k = 0; k < 3; k++) { mn[k] = Math.min(mn[k], n[k]); mx[k] = Math.max(mx[k], n[k]); }
+    const pad = P.radius * Math.max(Q.nodeScale, 1) * (1 + Math.max(0, -P.taper)) + fillet + 1e-3;
+    const size = [0, 1, 2].map((k) => mx[k] - mn[k] + 2 * pad);
+    let h = Math.max(rMin / (quality === 'fine' ? 3.2 : 1.9), Math.cbrt((size[0] * size[1] * size[2]) / budget));
+    const g = { origin: mn.map((v) => v - pad - 2 * h), h, dims: size.map((s) => Math.ceil(s / h) + 5) };
+    const F = frameField(g, graph, Q);
+    const m = marchingTets(F, g, 2);
+    return { positions: m.positions, normals: m.normals, indices: m.indices, voxel: h, dims: g.dims, volume: Math.abs(meshVolume(m.positions, m.indices)) };
+  }
+
+  // Print-ready blob: same field, re-meshed with marching tetrahedra (closed 2-manifold)
+  function printBlob() {
+    if (!C.B) return null;
+    const m = marchingTets(C.B, C.grid, 2);
+    return { positions: m.positions, normals: m.normals, indices: m.indices, voxel: C.grid.h, volume: Math.abs(meshVolume(m.positions, m.indices)) };
+  }
+
+  return { run, drawing, quads, printFrame, printBlob };
 }
